@@ -1,5 +1,4 @@
 {{- define "main" -}}
-
 {{- $opts := dict -}}
 {{- $defaultPrefix := (snakeCase .SchemaName) -}}
 {{- $emitClient := (ternary (eq (default .Opts.client "true") "false") false true) -}}
@@ -38,7 +37,7 @@
 
 {{- $prefix := $opts.prefix -}}
 {{- if eq $opts.emit "impl" -}}
-{{ template "impl" dict "Prefix" $prefix "Header" $opts.header "SchemaName" .SchemaName "SchemaVersion" .SchemaVersion "SchemaHash" .SchemaHash "BasePath" (default (and (hasField . "BasePath") .BasePath) "/rpc/") "WebrpcGenVersion" .WebrpcGenVersion "WebrpcTarget" .WebrpcTarget "WebrpcGenCommand" .WebrpcGenCommand "Types" .Types "Services" .Services "Errors" .Errors "WebrpcErrors" .WebrpcErrors "Opts" $opts "Client" $emitClient }}
+{{- template "impl" dict "Prefix" $prefix "Header" $opts.header "SchemaName" .SchemaName "SchemaVersion" .SchemaVersion "SchemaHash" .SchemaHash "BasePath" (default (and (hasField . "BasePath") .BasePath) "/rpc/") "WebrpcGenVersion" .WebrpcGenVersion "WebrpcTarget" .WebrpcTarget "WebrpcGenCommand" .WebrpcGenCommand "Types" .Types "Services" .Services "Errors" .Errors "WebrpcErrors" .WebrpcErrors "Opts" $opts "Client" $emitClient -}}
 {{- else -}}
 {{- $guard := printf "%s_%s_%s_H" (toUpper (snakeCase .SchemaName)) (toUpper (snakeCase $prefix)) (toUpper $opts.emit) -}}
 #ifndef {{$guard}}
