@@ -1,0 +1,31 @@
+{{- define "cTypeName" -}}
+{{- $prefix := .Prefix -}}
+{{- $name := .Name -}}
+{{- printf "%s_%s" $prefix (snakeCase $name) -}}
+{{- end -}}
+
+{{- define "cEnumValue" -}}
+{{- $prefix := .Prefix -}}
+{{- $typeName := .TypeName -}}
+{{- $fieldName := .FieldName -}}
+{{- printf "%s_%s_%s" (toUpper $prefix) (toUpper (snakeCase $typeName)) (toUpper (snakeCase $fieldName)) -}}
+{{- end -}}
+
+{{- define "cFieldName" -}}
+{{- $name := .Name -}}
+{{- snakeCase $name -}}
+{{- end -}}
+
+{{- define "cMethodRequestTypeName" -}}
+{{- $prefix := .Prefix -}}
+{{- $serviceName := .ServiceName -}}
+{{- $methodName := .MethodName -}}
+{{- printf "%s_%s_%s_request" $prefix (snakeCase $serviceName) (snakeCase $methodName) -}}
+{{- end -}}
+
+{{- define "cMethodResponseTypeName" -}}
+{{- $prefix := .Prefix -}}
+{{- $serviceName := .ServiceName -}}
+{{- $methodName := .MethodName -}}
+{{- printf "%s_%s_%s_response" $prefix (snakeCase $serviceName) (snakeCase $methodName) -}}
+{{- end -}}

@@ -1,0 +1,149 @@
+{{- define "implClient" -}}
+{{- $prefix := .Prefix -}}
+{{- range $_, $service := .Services }}
+struct {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} {
+    char *base_url;
+    char *bearer_token;
+    struct curl_slist *default_headers;
+    long timeout_ms;
+};
+
+static void {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}({{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client) {
+    if (!client) return;
+    free(client->bearer_token);
+    client->bearer_token = NULL;
+    if (client->default_headers) {
+        curl_slist_free_all(client->default_headers);
+        client->default_headers = NULL;
+    }
+    client->timeout_ms = 10000L;
+}
+
+int {{ printf "%s_%s_client_configure" $prefix (snakeCase $service.Name) }}({{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client, const {{ printf "%s_client_options" $prefix }} *options) {
+    if (!client) return 0;
+
+    {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+    if (!options) return 1;
+
+    if (options->timeout_ms > 0) {
+        client->timeout_ms = options->timeout_ms;
+    }
+
+    if (options->bearer_token) {
+        client->bearer_token = {{ printf "%s_strdup" $prefix }}(options->bearer_token);
+        if (!client->bearer_token) {
+            {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+            return 0;
+        }
+    }
+
+    if (options->headers_count > 0) {
+        if (!options->headers) {
+            {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+            return 0;
+        }
+        for (size_t i = 0; i < options->headers_count; ++i) {
+            if (!options->headers[i]) {
+                {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+                return 0;
+            }
+            struct curl_slist *next = curl_slist_append(client->default_headers, options->headers[i]);
+            if (!next) {
+                {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+                return 0;
+            }
+            client->default_headers = next;
+        }
+    }
+
+    return 1;
+}
+
+{{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *{{ printf "%s_%s_client_create" $prefix (snakeCase $service.Name) }}(const char *base_url, const {{ printf "%s_client_options" $prefix }} *options) {
+    {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client =
+        ({{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *)calloc(1, sizeof(*client));
+    if (!client) return NULL;
+    client->base_url = {{ printf "%s_strdup" $prefix }}(base_url ? base_url : "");
+    if (!client->base_url) {
+        free(client);
+        return NULL;
+    }
+    {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+    if (!{{ printf "%s_%s_client_configure" $prefix (snakeCase $service.Name) }}(client, options)) {
+        free(client->base_url);
+        client->base_url = NULL;
+        {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+        free(client);
+        return NULL;
+    }
+    return client;
+}
+
+void {{ printf "%s_%s_client_destroy" $prefix (snakeCase $service.Name) }}({{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client) {
+    if (!client) return;
+    free(client->base_url);
+    client->base_url = NULL;
+    {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+    free(client);
+}
+
+int {{ printf "%s_%s_client_send_prepared_request" $prefix (snakeCase $service.Name) }}(
+    {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client,
+    const {{ printf "%s_prepared_request" $prefix }} *request,
+    {{ printf "%s_http_response" $prefix }} *response,
+    {{ printf "%s_error" $prefix }} *error
+) {
+    if (!client || !request || !response) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "ClientError", "client, request, and response must be non-NULL", NULL);
+        return -1;
+    }
+
+    return {{ printf "%s_http_send_request" $prefix }}(
+        client->base_url,
+        request,
+        client->bearer_token,
+        client->default_headers,
+        client->timeout_ms,
+        response,
+        error
+    );
+}
+
+{{- range $_, $method := $service.Methods }}
+int {{ printf "%s_%s_%s" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(
+    {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client,
+    const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *request,
+    {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *response,
+    {{ printf "%s_error" $prefix }} *error
+) {
+    int rc = -1;
+    {{ printf "%s_prepared_request" $prefix }} prepared_request;
+    {{ printf "%s_http_response" $prefix }} http_response;
+    {{ printf "%s_prepared_request_init" $prefix }}(&prepared_request);
+    {{ printf "%s_http_response_init" $prefix }}(&http_response);
+
+    if (!client || !request || !response) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "ClientError", "client, request, and response must be non-NULL", NULL);
+        goto fail;
+    }
+
+    if ({{ printf "%s_%s_%s_prepare_request" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(request, &prepared_request, error) != 0) {
+        goto fail;
+    }
+    if ({{ printf "%s_%s_client_send_prepared_request" $prefix (snakeCase $service.Name) }}(client, &prepared_request, &http_response, error) != 0) {
+        goto fail;
+    }
+    if ({{ printf "%s_%s_%s_parse_response" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(&http_response, response, error) != 0) {
+        goto fail;
+    }
+    rc = 0;
+
+fail:
+    {{ printf "%s_prepared_request_free" $prefix }}(&prepared_request);
+    {{ printf "%s_http_response_free" $prefix }}(&http_response);
+    return rc;
+}
+
+{{- end }}
+{{- end }}
+{{- end -}}

@@ -1,0 +1,75 @@
+{{- define "type" -}}
+{{- $type := .Type -}}
+{{- $prefix := .Prefix -}}
+{{- $types := array -}}
+{{- if exists . "Types" -}}
+{{- $types = get . "Types" -}}
+{{- end -}}
+
+{{- if isMapType $type -}}
+    {{- template "assert_supported_map_key_type" dict "Type" (mapKeyType $type) "Types" $types -}}
+struct {
+    {{ template "type" dict "Type" (mapKeyType $type) "Prefix" $prefix "Types" $types }} *keys;
+    {{ template "type" dict "Type" (mapValueType $type) "Prefix" $prefix "Types" $types }} *values;
+    size_t count;
+}
+{{- else if isListType $type -}}
+    {{- $elem := listElemType $type -}}
+    {{- if eq (toString $elem) "byte" -}}
+struct {
+    uint8_t *data;
+    size_t len;
+}
+    {{- else -}}
+struct {
+    {{ template "type" dict "Type" $elem "Prefix" $prefix "Types" $types }} *items;
+    size_t count;
+}
+    {{- end -}}
+{{- else if isCoreType $type -}}
+    {{- if eq (toString $type) "byte" -}}uint8_t
+    {{- else if eq (toString $type) "bool" -}}bool
+    {{- else if eq (toString $type) "uint" -}}unsigned int
+    {{- else if eq (toString $type) "uint8" -}}uint8_t
+    {{- else if eq (toString $type) "uint16" -}}uint16_t
+    {{- else if eq (toString $type) "uint32" -}}uint32_t
+    {{- else if eq (toString $type) "uint64" -}}uint64_t
+    {{- else if eq (toString $type) "int" -}}int
+    {{- else if eq (toString $type) "int8" -}}int8_t
+    {{- else if eq (toString $type) "int16" -}}int16_t
+    {{- else if eq (toString $type) "int32" -}}int32_t
+    {{- else if eq (toString $type) "int64" -}}int64_t
+    {{- else if eq (toString $type) "float32" -}}float
+    {{- else if eq (toString $type) "float64" -}}double
+    {{- else if eq (toString $type) "string" -}}char *
+    {{- else if eq (toString $type) "timestamp" -}}{{ printf "%s_timestamp" $prefix }}
+    {{- else if eq (toString $type) "bigint" -}}{{ printf "%s_bigint" $prefix }}
+    {{- else if eq (toString $type) "any" -}}char *
+    {{- else if eq (toString $type) "null" -}}bool
+    {{- else -}}void *
+    {{- end -}}
+{{- else if isEnumType $type -}}
+{{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }}
+{{- else if and (hasField $type "Alias") $type.Alias -}}
+{{ template "type" dict "Type" $type.Alias.Type.Type "Prefix" $prefix "Types" $types }}
+{{- else if isString $type -}}
+    {{- $resolved := dict "matched" false -}}
+    {{- range $_, $schemaType := $types -}}
+        {{- if eq (toString $schemaType.Name) (toString $type) -}}
+            {{- $_ := set $resolved "matched" true -}}
+            {{- if isEnumType $schemaType -}}
+{{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }}
+            {{- else if and (hasField $schemaType "Alias") $schemaType.Alias -}}
+{{ template "type" dict "Type" $schemaType.Alias.Type.Type "Prefix" $prefix "Types" $types }}
+            {{- else -}}
+{{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }} *
+            {{- end -}}
+        {{- end -}}
+    {{- end -}}
+    {{- if not (get $resolved "matched") -}}
+{{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }} *
+    {{- end -}}
+{{- else -}}
+{{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }} *
+{{- end -}}
+{{- end -}}

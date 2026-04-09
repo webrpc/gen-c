@@ -1,0 +1,371 @@
+{{- define "implTransport" -}}
+{{- $prefix := .Prefix -}}
+static void {{ printf "%s_set_error" $prefix }}(
+    {{ printf "%s_error" $prefix }} *error,
+    int code,
+    int http_status,
+    const char *name,
+    const char *message,
+    const char *cause
+) {
+    if (!error) return;
+    {{ printf "%s_error_free" $prefix }}(error);
+    error->code = code;
+    error->http_status = http_status;
+    error->name = {{ printf "%s_strdup" $prefix }}(name ? name : "WebrpcError");
+    error->message = {{ printf "%s_strdup" $prefix }}(message ? message : "request failed");
+    error->cause = cause ? {{ printf "%s_strdup" $prefix }}(cause) : NULL;
+}
+
+static int {{ printf "%s_buffer_grow" $prefix }}({{ printf "%s_buffer" $prefix }} *buf, size_t need) {
+    if (buf->cap >= need) return 1;
+    size_t new_cap = buf->cap ? buf->cap : 1024;
+    while (new_cap < need) new_cap *= 2;
+    char *next = (char *)realloc(buf->data, new_cap);
+    if (!next) return 0;
+    buf->data = next;
+    buf->cap = new_cap;
+    return 1;
+}
+
+static size_t {{ printf "%s_write_cb" $prefix }}(char *ptr, size_t size, size_t nmemb, void *userdata) {
+    size_t n = size * nmemb;
+    {{ printf "%s_buffer" $prefix }} *buf = ({{ printf "%s_buffer" $prefix }} *)userdata;
+    if (!{{ printf "%s_buffer_grow" $prefix }}(buf, buf->len + n + 1)) return 0;
+    memcpy(buf->data + buf->len, ptr, n);
+    buf->len += n;
+    buf->data[buf->len] = '\0';
+    return n;
+}
+
+static char *{{ printf "%s_join_url" $prefix }}(const char *base_url, const char *path) {
+    if (!base_url) return NULL;
+    if (!path) path = "";
+
+    size_t base_len = strlen(base_url);
+    size_t path_len = strlen(path);
+    int base_has_slash = base_len > 0 && base_url[base_len - 1] == '/';
+    int path_has_slash = path_len > 0 && path[0] == '/';
+    size_t cap = base_len + path_len + 2;
+    char *out = (char *)malloc(cap);
+    if (!out) return NULL;
+
+    if (base_len == 0) {
+        snprintf(out, cap, "%s", path);
+    } else if (path_len == 0) {
+        snprintf(out, cap, "%s", base_url);
+    } else if (base_has_slash && path_has_slash) {
+        snprintf(out, cap, "%.*s%s", (int)(base_len - 1), base_url, path);
+    } else if (!base_has_slash && !path_has_slash) {
+        snprintf(out, cap, "%s/%s", base_url, path);
+    } else {
+        snprintf(out, cap, "%s%s", base_url, path);
+    }
+    return out;
+}
+
+static int {{ printf "%s_append_header" $prefix }}(struct curl_slist **headers, const char *header_value) {
+    struct curl_slist *next;
+
+    if (!headers || !header_value) return 0;
+    next = curl_slist_append(*headers, header_value);
+    if (!next) return 0;
+    *headers = next;
+    return 1;
+}
+
+static int {{ printf "%s_header_name_equals" $prefix }}(const char *header, const char *name) {
+    size_t i = 0;
+
+    if (!header || !name) return 0;
+
+    while (header[i] != '\0' && header[i] != ':' && name[i] != '\0' && name[i] != ':') {
+        unsigned char h = (unsigned char)header[i];
+        unsigned char n = (unsigned char)name[i];
+        if (h >= 'A' && h <= 'Z') h = (unsigned char)(h - 'A' + 'a');
+        if (n >= 'A' && n <= 'Z') n = (unsigned char)(n - 'A' + 'a');
+        if (h != n) return 0;
+        i++;
+    }
+
+    while (header[i] == ' ' || header[i] == '\t') {
+        i++;
+    }
+
+    while (name[i] == ' ' || name[i] == '\t') {
+        i++;
+    }
+
+    return (name[i] == '\0' || name[i] == ':') && (header[i] == '\0' || header[i] == ':');
+}
+
+static int {{ printf "%s_prepared_request_has_header" $prefix }}(const {{ printf "%s_prepared_request" $prefix }} *request, const char *name) {
+    if (!request || !name || !request->headers) return 0;
+
+    for (size_t i = 0; i < request->headers_count; ++i) {
+        if (request->headers[i] && {{ printf "%s_header_name_equals" $prefix }}(request->headers[i], name)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int {{ printf "%s_prepared_request_overrides_header" $prefix }}(const {{ printf "%s_prepared_request" $prefix }} *request, const char *header_line) {
+    if (!request || !header_line) return 0;
+
+    if ({{ printf "%s_header_name_equals" $prefix }}(header_line, "Content-Type")) {
+        if ((request->content_type && request->content_type[0] != '\0') ||
+            {{ printf "%s_prepared_request_has_header" $prefix }}(request, "Content-Type")) {
+            return 1;
+        }
+    }
+
+    if (!request->headers) return 0;
+    for (size_t i = 0; i < request->headers_count; ++i) {
+        if (request->headers[i] &&
+            {{ printf "%s_header_name_equals" $prefix }}(request->headers[i], header_line)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int {{ printf "%s_curl_runtime_init" $prefix }}({{ printf "%s_error" $prefix }} *error) {
+    static int initialized = 0;
+
+    if (initialized) {
+        return 0;
+    }
+
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "curl_global_init failed", NULL);
+        return -1;
+    }
+
+    if (atexit(curl_global_cleanup) != 0) {
+        curl_global_cleanup();
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "failed to register curl_global_cleanup", NULL);
+        return -1;
+    }
+
+    initialized = 1;
+    return 0;
+}
+
+static int {{ printf "%s_http_send_request" $prefix }}(
+    const char *base_url,
+    const {{ printf "%s_prepared_request" $prefix }} *request,
+    const char *bearer_token,
+    const struct curl_slist *default_headers,
+    long timeout_ms,
+    {{ printf "%s_http_response" $prefix }} *response,
+    {{ printf "%s_error" $prefix }} *error
+) {
+    const char *http_method;
+    {{ printf "%s_http_response" $prefix }} result;
+    int has_content_type = 0;
+    int has_authorization = 0;
+    {{ printf "%s_http_response_init" $prefix }}(&result);
+
+    if (!request || !response) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "ClientError", "request and response must be non-NULL", NULL);
+        return -1;
+    }
+
+    if ({{ printf "%s_curl_runtime_init" $prefix }}(error) != 0) {
+        return -1;
+    }
+
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "curl_easy_init failed", NULL);
+        return -1;
+    }
+
+    char *url = {{ printf "%s_join_url" $prefix }}(base_url, request->path ? request->path : "");
+    if (!url) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "failed to build URL", NULL);
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+
+    struct curl_slist *headers = NULL;
+    for (const struct curl_slist *it = default_headers; it; it = it->next) {
+        if ((bearer_token && bearer_token[0] != '\0' && {{ printf "%s_header_name_equals" $prefix }}(it->data, "Authorization")) ||
+            {{ printf "%s_prepared_request_overrides_header" $prefix }}(request, it->data)) {
+            continue;
+        }
+        if (!{{ printf "%s_append_header" $prefix }}(&headers, it->data)) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "failed to copy request headers", NULL);
+            curl_slist_free_all(headers);
+            free(url);
+            curl_easy_cleanup(curl);
+            return -1;
+        }
+        if ({{ printf "%s_header_name_equals" $prefix }}(it->data, "Content-Type")) {
+            has_content_type = 1;
+        }
+        if ({{ printf "%s_header_name_equals" $prefix }}(it->data, "Authorization")) {
+            has_authorization = 1;
+        }
+    }
+
+    if (request->content_type && request->content_type[0] != '\0') {
+        size_t need = strlen("Content-Type: ") + strlen(request->content_type) + 1;
+        char *content_type_header = (char *)malloc(need);
+        if (!content_type_header) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "failed to allocate content-type header", NULL);
+            curl_slist_free_all(headers);
+            free(url);
+            curl_easy_cleanup(curl);
+            return -1;
+        }
+        snprintf(content_type_header, need, "Content-Type: %s", request->content_type);
+        if (!{{ printf "%s_append_header" $prefix }}(&headers, content_type_header)) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "failed to append content-type header", NULL);
+            free(content_type_header);
+            curl_slist_free_all(headers);
+            free(url);
+            curl_easy_cleanup(curl);
+            return -1;
+        }
+        free(content_type_header);
+        has_content_type = 1;
+    }
+
+    for (size_t i = 0; i < request->headers_count; ++i) {
+        if (!request->headers || !request->headers[i]) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "request headers are invalid", NULL);
+            curl_slist_free_all(headers);
+            free(url);
+            curl_easy_cleanup(curl);
+            return -1;
+        }
+        if (!{{ printf "%s_append_header" $prefix }}(&headers, request->headers[i])) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "failed to append request header", NULL);
+            curl_slist_free_all(headers);
+            free(url);
+            curl_easy_cleanup(curl);
+            return -1;
+        }
+        if ({{ printf "%s_header_name_equals" $prefix }}(request->headers[i], "Content-Type")) {
+            has_content_type = 1;
+        }
+        if ({{ printf "%s_header_name_equals" $prefix }}(request->headers[i], "Authorization")) {
+            has_authorization = 1;
+        }
+    }
+
+    if (!has_content_type && !{{ printf "%s_append_header" $prefix }}(&headers, "Content-Type: application/json")) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "failed to allocate request headers", NULL);
+        curl_slist_free_all(headers);
+        free(url);
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+    if (bearer_token && bearer_token[0] != '\0' && !has_authorization) {
+        size_t need = strlen("Authorization: Bearer ") + strlen(bearer_token) + 1;
+        char *auth_header = (char *)malloc(need);
+        if (!auth_header) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "failed to allocate auth header", NULL);
+            curl_slist_free_all(headers);
+            free(url);
+            curl_easy_cleanup(curl);
+            return -1;
+        }
+        snprintf(auth_header, need, "Authorization: Bearer %s", bearer_token);
+        if (!{{ printf "%s_append_header" $prefix }}(&headers, auth_header)) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "failed to append auth header", NULL);
+            free(auth_header);
+            curl_slist_free_all(headers);
+            free(url);
+            curl_easy_cleanup(curl);
+            return -1;
+        }
+        free(auth_header);
+    }
+
+    {{ printf "%s_buffer" $prefix }} buf;
+    memset(&buf, 0, sizeof(buf));
+    http_method = request->http_method && request->http_method[0] != '\0' ? request->http_method : "POST";
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, http_method);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body ? request->body : "");
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)(request->body ? request->body_len : 0));
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms > 0 ? timeout_ms : 10000L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, {{ printf "%s_write_cb" $prefix }});
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+
+    CURLcode rc = curl_easy_perform(curl);
+    if (rc != CURLE_OK) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "TransportError", "HTTP request failed", curl_easy_strerror(rc));
+    } else {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.status_code);
+        result.body = buf.data ? buf.data : {{ printf "%s_strdup" $prefix }}("");
+        result.body_len = buf.len;
+        buf.data = NULL;
+    }
+
+    free(buf.data);
+    curl_slist_free_all(headers);
+    free(url);
+    curl_easy_cleanup(curl);
+    if (rc != CURLE_OK) {
+        {{ printf "%s_http_response_free" $prefix }}(&result);
+        return -1;
+    }
+
+    *response = result;
+    memset(&result, 0, sizeof(result));
+    return 0;
+}
+
+static void {{ printf "%s_parse_rpc_error" $prefix }}(const char *body, long http_status, {{ printf "%s_error" $prefix }} *error) {
+    cJSON *error_name = NULL;
+    cJSON *error_code = NULL;
+    cJSON *error_msg = NULL;
+    cJSON *error_cause = NULL;
+    cJSON *error_status = NULL;
+    int64_t parsed_code = 0;
+    int64_t parsed_status = (int64_t)http_status;
+
+    if (!body || body[0] == '\0') {
+        {{ printf "%s_set_error" $prefix }}(error, 0, (int)http_status, "WebrpcRequestFailed", "request failed", NULL);
+        return;
+    }
+
+    cJSON *root = {{ printf "%s_cjson_parse" $prefix }}(body);
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) cJSON_Delete(root);
+        {{ printf "%s_set_error" $prefix }}(error, 0, (int)http_status, "WebrpcRequestFailed", "request failed", body);
+        return;
+    }
+
+    error_name = cJSON_GetObjectItemCaseSensitive(root, "error");
+    error_code = cJSON_GetObjectItemCaseSensitive(root, "code");
+    error_msg = cJSON_GetObjectItemCaseSensitive(root, "msg");
+    error_cause = cJSON_GetObjectItemCaseSensitive(root, "cause");
+    error_status = cJSON_GetObjectItemCaseSensitive(root, "status");
+    if (error_code && !cJSON_IsNull(error_code)) {
+        (void){{ printf "%s_cjson_get_int64_exact" $prefix }}(error_code, &parsed_code);
+    }
+    if (error_status && !cJSON_IsNull(error_status)) {
+        (void){{ printf "%s_cjson_get_int64_exact" $prefix }}(error_status, &parsed_status);
+    }
+
+    {{ printf "%s_set_error" $prefix }}(
+        error,
+        (int)parsed_code,
+        (int)parsed_status,
+        cJSON_IsString(error_name) && cJSON_GetStringValue(error_name) ? cJSON_GetStringValue(error_name) : "WebrpcRequestFailed",
+        cJSON_IsString(error_msg) && cJSON_GetStringValue(error_msg) ? cJSON_GetStringValue(error_msg) : "request failed",
+        cJSON_IsString(error_cause) ? cJSON_GetStringValue(error_cause) : NULL
+    );
+    cJSON_Delete(root);
+}
+{{- end -}}
