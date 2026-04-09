@@ -45,6 +45,11 @@ Dependency names can vary slightly by platform or package manager. The important
 is that the generated implementation can include `<cjson/cJSON.h>` and link against
 `libcurl` and `cJSON`.
 
+Because the generated implementation uses `cJSON`, exact large 64-bit integer handling
+follows `cJSON`'s numeric behavior. If your API needs exact integer round-tripping beyond
+normal JSON number precision expectations, prefer `bigint` in the schema instead of
+`int64` / `uint64`.
+
 ## Features
 
 The current generator supports:
@@ -135,4 +140,5 @@ Change any of the following values by passing `-option="Value"` CLI flag to `web
 
 - `-target` can be a local template directory or a git module path.
 - `bigint` support is string-based by design to avoid precision loss in C JSON handling.
+- for precision-sensitive large integer values, prefer `bigint` over `int64` / `uint64` in the schema when targeting this generator
 - The generated implementation is tested with smoke, codec, succinct, and reference interop coverage in this repo.
