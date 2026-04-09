@@ -2,8 +2,8 @@
 {{- $prefix := .Prefix -}}
 {{- $encodeReachable := dict -}}
 {{- $decodeReachable := dict -}}
-{{ template "collectStructCodecReachability" dict "Types" .Types "Services" .Services "EncodeReachable" $encodeReachable "DecodeReachable" $decodeReachable }}
-{{ template "implPreamble" . }}
+{{- template "collectStructCodecReachability" dict "Types" .Types "Services" .Services "EncodeReachable" $encodeReachable "DecodeReachable" $decodeReachable -}}
+{{- template "implPreamble" . }}
 {{ template "implTransport" . }}
 
 {{- range $_, $type := .Types }}
