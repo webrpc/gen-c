@@ -1,0 +1,25 @@
+{{- define "impl" -}}
+{{- $prefix := .Prefix -}}
+{{- $encodeReachable := dict -}}
+{{- $decodeReachable := dict -}}
+{{ template "collectStructCodecReachability" dict "Types" .Types "Services" .Services "EncodeReachable" $encodeReachable "DecodeReachable" $decodeReachable }}
+{{ template "implPreamble" . }}
+{{ template "implTransport" . }}
+
+{{- range $_, $type := .Types }}
+{{- if isStructType $type }}
+{{- if exists $encodeReachable $type.Name }}
+static {{ toUpper $prefix }}_JSON_UNUSED cJSON *{{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_to_json(const {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *value);
+{{- end }}
+{{- if exists $decodeReachable $type.Name }}
+static {{ toUpper $prefix }}_JSON_UNUSED int {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_from_json(const cJSON *json, {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *out, {{ printf "%s_error" $prefix }} *error);
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{ template "implStructJSON" dict "Prefix" $prefix "Types" .Types "EncodeReachable" $encodeReachable "DecodeReachable" $decodeReachable }}
+{{ template "implMethodJSON" dict "Prefix" $prefix "BasePath" .BasePath "Services" .Services "Types" .Types }}
+{{- if .Client }}
+{{ template "implClient" dict "Prefix" $prefix "Services" .Services }}
+{{- end }}
+{{- end -}}

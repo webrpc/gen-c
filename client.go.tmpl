@@ -1,0 +1,40 @@
+{{- define "client" -}}
+{{- $prefix := .Prefix -}}
+{{- $services := .Services -}}
+
+{{- range $_, $service := $services }}
+typedef struct {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }};
+
+{{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *{{ printf "%s_%s_client_create" $prefix (snakeCase $service.Name) }}(const char *base_url, const {{ printf "%s_client_options" $prefix }} *options);
+void {{ printf "%s_%s_client_destroy" $prefix (snakeCase $service.Name) }}({{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client);
+int {{ printf "%s_%s_client_configure" $prefix (snakeCase $service.Name) }}({{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client, const {{ printf "%s_client_options" $prefix }} *options);
+int {{ printf "%s_%s_client_send_prepared_request" $prefix (snakeCase $service.Name) }}(
+    {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client,
+    const {{ printf "%s_prepared_request" $prefix }} *request,
+    {{ printf "%s_http_response" $prefix }} *response,
+    {{ printf "%s_error" $prefix }} *error
+);
+
+{{- range $_, $method := $service.Methods }}
+int {{ printf "%s_%s_%s_prepare_request" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(
+    const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *request,
+    {{ printf "%s_prepared_request" $prefix }} *prepared_request,
+    {{ printf "%s_error" $prefix }} *error
+);
+
+int {{ printf "%s_%s_%s_parse_response" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(
+    const {{ printf "%s_http_response" $prefix }} *http_response,
+    {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *response,
+    {{ printf "%s_error" $prefix }} *error
+);
+
+int {{ printf "%s_%s_%s" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(
+    {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client,
+    const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *request,
+    {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *response,
+    {{ printf "%s_error" $prefix }} *error
+);
+
+{{- end }}
+{{- end }}
+{{- end -}}

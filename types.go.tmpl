@@ -1,0 +1,223 @@
+{{- define "types" -}}
+{{- $prefix := .Prefix -}}
+{{- $types := .Types -}}
+{{- $services := .Services -}}
+
+{{- range $_, $type := $types }}
+{{- if isStructType $type }}
+typedef struct {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }};
+static inline void {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_init({{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *value);
+static inline void {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_free({{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *value);
+
+{{- end }}
+{{- end }}
+
+{{- range $_, $type := $types }}
+{{- if isEnumType $type }}
+typedef enum {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} {
+    {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper (snakeCase $type.Name)) }} = 0,
+{{- range $_, $field := $type.Fields }}
+    {{ template "cEnumValue" dict "Prefix" $prefix "TypeName" $type.Name "FieldName" $field.Name }},
+{{- end }}
+} {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }};
+
+static inline const char *{{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_to_string({{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} value) {
+    switch (value) {
+        case {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper (snakeCase $type.Name)) }}: return "UNKNOWN";
+{{- range $_, $field := $type.Fields }}
+        case {{ template "cEnumValue" dict "Prefix" $prefix "TypeName" $type.Name "FieldName" $field.Name }}: return "{{$field.Name}}";
+{{- end }}
+        default: return "UNKNOWN";
+    }
+}
+
+static inline int {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_from_string(const char *value, {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *out) {
+    if (!out || !value) return -1;
+{{- range $_, $field := $type.Fields }}
+    if (strcmp(value, "{{$field.Name}}") == 0) {
+        *out = {{ template "cEnumValue" dict "Prefix" $prefix "TypeName" $type.Name "FieldName" $field.Name }};
+        return 0;
+    }
+{{- end }}
+    *out = {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper (snakeCase $type.Name)) }};
+    return -1;
+}
+
+{{- end }}
+{{- end }}
+
+{{- range $_, $type := $types }}
+{{- if isStructType $type }}
+struct {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} {
+{{- range $_, $field := $type.Fields }}
+    {{- $json := dict "name" $field.Name "ignored" false "explicit" false -}}
+    {{- range $_, $meta := $field.Meta }}
+        {{- if index $meta "json" -}}
+            {{- $value := index $meta "json" -}}
+            {{- if eq $value "-" -}}
+                {{- $_ := set $json "ignored" true -}}
+            {{- else -}}
+                {{- $_ := set $json "name" $value -}}
+                {{- $_ := set $json "explicit" true -}}
+            {{- end -}}
+        {{- end -}}
+        {{- if and (not (get $json "ignored")) (not (get $json "explicit")) (index $meta "go.tag.json") -}}
+            {{- $tagName := first (split "," (index $meta "go.tag.json")) -}}
+            {{- if eq $tagName "-" -}}
+                {{- $_ := set $json "ignored" true -}}
+            {{- else if $tagName -}}
+                {{- $_ := set $json "name" $tagName -}}
+            {{- end -}}
+        {{- end -}}
+    {{- end }}
+    {{- if not (get $json "ignored") }}
+    {{- $fieldName := (snakeCase $field.Name) -}}
+    {{- if $field.Optional }}
+    bool has_{{$fieldName}};
+    {{- end }}
+    {{ template "type" dict "Type" $field.Type "Prefix" $prefix "Types" $types }} {{$fieldName}};
+    {{- end }}
+{{- end }}
+};
+
+static inline void {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_init({{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *value) {
+    if (!value) return;
+    memset(value, 0, sizeof(*value));
+}
+
+static inline void {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_free({{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *value) {
+    if (!value) return;
+{{- range $_, $field := $type.Fields }}
+    {{- $json := dict "ignored" false -}}
+    {{- range $_, $meta := $field.Meta }}
+        {{- if index $meta "json" -}}
+            {{- if eq (index $meta "json") "-" -}}
+                {{- $_ := set $json "ignored" true -}}
+            {{- else -}}
+                {{- $_ := set $json "ignored" false -}}
+            {{- end -}}
+        {{- end -}}
+        {{- if and (not (get $json "ignored")) (index $meta "go.tag.json") -}}
+            {{- if eq (first (split "," (index $meta "go.tag.json"))) "-" -}}
+                {{- $_ := set $json "ignored" true -}}
+            {{- end -}}
+        {{- end -}}
+    {{- end }}
+    {{- if not (get $json "ignored") }}
+{{ template "freeField" dict "FieldExpr" (printf "value->%s" (snakeCase $field.Name)) "Type" $field.Type "Prefix" $prefix }}
+    {{- end }}
+{{- end }}
+    memset(value, 0, sizeof(*value));
+}
+
+{{- end }}
+{{- end }}
+
+{{- range $_, $service := $services }}
+{{- range $_, $method := $service.Methods }}
+typedef struct {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} {
+{{- range $_, $input := $method.Inputs }}
+    {{- $fieldName := (snakeCase $input.Name) -}}
+    {{- if $input.Optional }}
+    bool has_{{$fieldName}};
+    {{- end }}
+    {{ template "type" dict "Type" $input.Type "Prefix" $prefix "Types" $types }} {{$fieldName}};
+{{- end }}
+} {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }};
+
+static inline void {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_init({{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *value) {
+    if (!value) return;
+    memset(value, 0, sizeof(*value));
+}
+
+static inline void {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_free({{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *value) {
+    if (!value) return;
+{{- range $_, $input := $method.Inputs }}
+{{ template "freeField" dict "FieldExpr" (printf "value->%s" (snakeCase $input.Name)) "Type" $input.Type "Prefix" $prefix }}
+{{- end }}
+    memset(value, 0, sizeof(*value));
+}
+
+typedef struct {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} {
+{{- range $_, $output := $method.Outputs }}
+    {{- $fieldName := (snakeCase $output.Name) -}}
+    {{- if $output.Optional }}
+    bool has_{{$fieldName}};
+    {{- end }}
+    {{ template "type" dict "Type" $output.Type "Prefix" $prefix "Types" $types }} {{$fieldName}};
+{{- end }}
+} {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }};
+
+static inline void {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_init({{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *value) {
+    if (!value) return;
+    memset(value, 0, sizeof(*value));
+}
+
+static inline void {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_free({{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *value) {
+    if (!value) return;
+{{- range $_, $output := $method.Outputs }}
+{{ template "freeField" dict "FieldExpr" (printf "value->%s" (snakeCase $output.Name)) "Type" $output.Type "Prefix" $prefix }}
+{{- end }}
+    memset(value, 0, sizeof(*value));
+}
+
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "freeField" -}}
+{{- $expr := .FieldExpr -}}
+{{- $type := .Type -}}
+{{- $prefix := .Prefix -}}
+{{- $depth := 0 -}}
+{{- if exists . "Depth" -}}
+{{- $depth = get . "Depth" -}}
+{{- end -}}
+{{- if isMapType $type }}
+    if ({{$expr}}.keys || {{$expr}}.values) {
+        for (size_t {{ printf "free_map_idx_%d" $depth }} = 0; {{ printf "free_map_idx_%d" $depth }} < {{$expr}}.count; ++{{ printf "free_map_idx_%d" $depth }}) {
+{{ template "freeField" dict "FieldExpr" (printf "%s.keys[%s]" $expr (printf "free_map_idx_%d" $depth)) "Type" (mapKeyType $type) "Prefix" $prefix "Depth" (add $depth 1) }}
+{{ template "freeField" dict "FieldExpr" (printf "%s.values[%s]" $expr (printf "free_map_idx_%d" $depth)) "Type" (mapValueType $type) "Prefix" $prefix "Depth" (add $depth 1) }}
+        }
+        free({{$expr}}.keys);
+        free({{$expr}}.values);
+        {{$expr}}.keys = NULL;
+        {{$expr}}.values = NULL;
+        {{$expr}}.count = 0;
+    }
+{{- else if isListType $type }}
+    {{- $elem := listElemType $type -}}
+    {{- if eq (toString $elem) "byte" }}
+    free({{$expr}}.data);
+    {{$expr}}.data = NULL;
+    {{$expr}}.len = 0;
+    {{- else }}
+    if ({{$expr}}.items) {
+        for (size_t {{ printf "free_list_idx_%d" $depth }} = 0; {{ printf "free_list_idx_%d" $depth }} < {{$expr}}.count; ++{{ printf "free_list_idx_%d" $depth }}) {
+{{ template "freeField" dict "FieldExpr" (printf "%s.items[%s]" $expr (printf "free_list_idx_%d" $depth)) "Type" $elem "Prefix" $prefix "Depth" (add $depth 1) }}
+        }
+        free({{$expr}}.items);
+        {{$expr}}.items = NULL;
+        {{$expr}}.count = 0;
+    }
+    {{- end }}
+{{- else if isCoreType $type }}
+    {{- if or (eq (toString $type) "string") (eq (toString $type) "any") }}
+    free({{$expr}});
+    {{$expr}} = NULL;
+    {{- else if eq (toString $type) "timestamp" }}
+    {{ printf "%s_timestamp_free" $prefix }}(&{{$expr}});
+    {{- else if eq (toString $type) "bigint" }}
+    {{ printf "%s_bigint_free" $prefix }}(&{{$expr}});
+    {{- end }}
+{{- else if isEnumType $type }}
+{{- else if and (hasField $type "Alias") $type.Alias }}
+{{ template "freeField" dict "FieldExpr" $expr "Type" $type.Alias.Type.Type "Prefix" $prefix }}
+{{- else if isStructType $type }}
+    if ({{$expr}}) {
+        {{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }}_free({{$expr}});
+        free({{$expr}});
+        {{$expr}} = NULL;
+    }
+{{- end }}
+{{- end -}}

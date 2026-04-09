@@ -1,0 +1,398 @@
+{{- define "assert_supported_map_key_type" -}}
+{{- $type := .Type -}}
+{{- $types := .Types -}}
+{{- if eq (toString $type) "string" -}}
+{{- else -}}
+{{- $state := dict "matched" false -}}
+{{- range $_, $schemaType := $types -}}
+    {{- if eq (toString $schemaType.Name) (toString $type) -}}
+        {{- $_ := set $state "matched" true -}}
+        {{- if isEnumType $schemaType -}}
+        {{- else if and (hasField $schemaType "Alias") $schemaType.Alias -}}
+{{ template "assert_supported_map_key_type" dict "Type" $schemaType.Alias.Type.Type "Types" $types }}
+        {{- else -}}
+{{- fail (printf "C generator error: unsupported map key type %s (only map<string, T> and map<enum, T> are supported)" (toString $type)) -}}
+        {{- end -}}
+    {{- end -}}
+{{- end -}}
+{{- if not (get $state "matched") -}}
+{{- fail (printf "C generator error: unsupported map key type %s (only map<string, T> and map<enum, T> are supported)" (toString $type)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "json_encode_map_key_expr" -}}
+{{- $prefix := .Prefix -}}
+{{- $type := .Type -}}
+{{- $expr := .Expr -}}
+{{- $types := .Types -}}
+{{- if eq (toString $type) "string" -}}
+{{$expr}}
+{{- else -}}
+{{- $state := dict "matched" false -}}
+{{- range $_, $schemaType := $types -}}
+    {{- if eq (toString $schemaType.Name) (toString $type) -}}
+        {{- $_ := set $state "matched" true -}}
+        {{- if isEnumType $schemaType -}}
+{{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }}_to_string({{$expr}})
+        {{- else if and (hasField $schemaType "Alias") $schemaType.Alias -}}
+{{ template "json_encode_map_key_expr" dict "Prefix" $prefix "Type" $schemaType.Alias.Type.Type "Expr" $expr "Types" $types }}
+        {{- end -}}
+    {{- end -}}
+{{- end -}}
+{{- if not (get $state "matched") -}}
+NULL
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "json_decode_map_key_from_string" -}}
+{{- $prefix := .Prefix -}}
+{{- $type := .Type -}}
+{{- $src := .StringExpr -}}
+{{- $dest := .DestExpr -}}
+{{- $types := .Types -}}
+{{- if eq (toString $type) "string" }}
+    {{$dest}} = {{ printf "%s_strdup" $prefix }}({{$src}});
+    if (!{{$dest}}) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "out of memory decoding map key", NULL);
+        goto fail;
+    }
+{{- else }}
+{{- $state := dict "matched" false -}}
+{{- range $_, $schemaType := $types }}
+    {{- if eq (toString $schemaType.Name) (toString $type) }}
+        {{- $_ := set $state "matched" true -}}
+        {{- if isEnumType $schemaType }}
+    if ({{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }}_from_string({{$src}}, &{{$dest}}) != 0) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected enum map key", NULL);
+        goto fail;
+    }
+        {{- else if and (hasField $schemaType "Alias") $schemaType.Alias }}
+{{ template "json_decode_map_key_from_string" dict "Prefix" $prefix "Type" $schemaType.Alias.Type.Type "StringExpr" $src "DestExpr" $dest "Types" $types }}
+        {{- else }}
+    {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "unsupported map key type", NULL);
+    goto fail;
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- if not (get $state "matched") }}
+    {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "unsupported map key type", NULL);
+    goto fail;
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "json_encode_value" -}}
+{{- $prefix := .Prefix -}}
+{{- $type := .Type -}}
+{{- $expr := .Expr -}}
+{{- $out := .OutVar -}}
+{{- $depth := 0 -}}
+{{- if exists . "Depth" -}}
+{{- $depth = get . "Depth" -}}
+{{- end -}}
+{{- $types := array -}}
+{{- if exists . "Types" -}}
+{{- $types = get . "Types" -}}
+{{- end -}}
+{{- if isMapType $type }}
+    {
+        cJSON *object_json = cJSON_CreateObject();
+        if (!object_json) goto fail;
+{{ template "assert_supported_map_key_type" dict "Type" (mapKeyType $type) "Types" $types }}
+        for (size_t {{ printf "map_idx_%d" $depth }} = 0; {{ printf "map_idx_%d" $depth }} < {{$expr}}.count; ++{{ printf "map_idx_%d" $depth }}) {
+            const char *{{ printf "map_key_%d" $depth }} = {{ template "json_encode_map_key_expr" dict "Prefix" $prefix "Type" (mapKeyType $type) "Expr" (printf "%s.keys[%s]" $expr (printf "map_idx_%d" $depth)) "Types" $types }};
+            cJSON *{{ printf "map_value_json_%d" $depth }} = NULL;
+{{ template "json_encode_value" dict "Prefix" $prefix "Type" (mapValueType $type) "Expr" (printf "%s.values[%s]" $expr (printf "map_idx_%d" $depth)) "OutVar" (printf "map_value_json_%d" $depth) "Depth" (add $depth 1) "Types" $types }}
+            if (!{{ printf "map_key_%d" $depth }}) {
+                cJSON_Delete({{ printf "map_value_json_%d" $depth }});
+                cJSON_Delete(object_json);
+                goto fail;
+            }
+            if (!cJSON_AddItemToObject(object_json, {{ printf "map_key_%d" $depth }}, {{ printf "map_value_json_%d" $depth }})) {
+                cJSON_Delete({{ printf "map_value_json_%d" $depth }});
+                cJSON_Delete(object_json);
+                goto fail;
+            }
+        }
+        {{$out}} = object_json;
+    }
+{{- else if isListType $type }}
+    {{- $elem := listElemType $type -}}
+    {
+        cJSON *array_json = cJSON_CreateArray();
+        if (!array_json) goto fail;
+        {{- if eq (toString $elem) "byte" }}
+        for (size_t {{ printf "list_idx_%d" $depth }} = 0; {{ printf "list_idx_%d" $depth }} < {{$expr}}.len; ++{{ printf "list_idx_%d" $depth }}) {
+            cJSON *{{ printf "list_entry_json_%d" $depth }} = cJSON_CreateNumber((double){{$expr}}.data[{{ printf "list_idx_%d" $depth }}]);
+            if (!{{ printf "list_entry_json_%d" $depth }}) {
+                cJSON_Delete(array_json);
+                goto fail;
+            }
+            if (!cJSON_AddItemToArray(array_json, {{ printf "list_entry_json_%d" $depth }})) {
+                cJSON_Delete({{ printf "list_entry_json_%d" $depth }});
+                cJSON_Delete(array_json);
+                goto fail;
+            }
+        }
+        {{- else }}
+        for (size_t {{ printf "list_idx_%d" $depth }} = 0; {{ printf "list_idx_%d" $depth }} < {{$expr}}.count; ++{{ printf "list_idx_%d" $depth }}) {
+            cJSON *{{ printf "list_entry_json_%d" $depth }} = NULL;
+{{ template "json_encode_value" dict "Prefix" $prefix "Type" $elem "Expr" (printf "%s.items[%s]" $expr (printf "list_idx_%d" $depth)) "OutVar" (printf "list_entry_json_%d" $depth) "Depth" (add $depth 1) "Types" $types }}
+            if (!cJSON_AddItemToArray(array_json, {{ printf "list_entry_json_%d" $depth }})) {
+                cJSON_Delete({{ printf "list_entry_json_%d" $depth }});
+                cJSON_Delete(array_json);
+                goto fail;
+            }
+        }
+        {{- end }}
+        {{$out}} = array_json;
+    }
+{{- else if isCoreType $type }}
+    {{- if eq (toString $type) "string" }}
+    {{$out}} = {{$expr}} ? cJSON_CreateString({{$expr}}) : cJSON_CreateNull();
+    if (!{{$out}}) goto fail;
+    {{- else if eq (toString $type) "any" }}
+    if ({{$expr}}) {
+        {{$out}} = {{ printf "%s_cjson_parse" $prefix }}({{$expr}});
+    } else {
+        {{$out}} = cJSON_CreateNull();
+    }
+    if (!{{$out}}) goto fail;
+    {{- else if eq (toString $type) "bool" }}
+    {{$out}} = cJSON_CreateBool({{$expr}} ? 1 : 0);
+    if (!{{$out}}) goto fail;
+    {{- else if or (eq (toString $type) "uint") (eq (toString $type) "uint8") (eq (toString $type) "uint16") (eq (toString $type) "uint32") (eq (toString $type) "byte") }}
+    {{$out}} = cJSON_CreateNumber((double){{$expr}});
+    if (!{{$out}}) goto fail;
+    {{- else if eq (toString $type) "uint64" }}
+    {{$out}} = cJSON_CreateNumber((double){{$expr}});
+    if (!{{$out}}) goto fail;
+    {{- else if or (eq (toString $type) "int") (eq (toString $type) "int8") (eq (toString $type) "int16") (eq (toString $type) "int32") (eq (toString $type) "int64") }}
+    {{$out}} = cJSON_CreateNumber((double){{$expr}});
+    if (!{{$out}}) goto fail;
+    {{- else if or (eq (toString $type) "float32") (eq (toString $type) "float64") }}
+    {{$out}} = cJSON_CreateNumber((double){{$expr}});
+    if (!{{$out}}) goto fail;
+    {{- else if eq (toString $type) "timestamp" }}
+    {{$out}} = {{$expr}}.value ? cJSON_CreateString({{$expr}}.value) : cJSON_CreateNull();
+    if (!{{$out}}) goto fail;
+    {{- else if eq (toString $type) "bigint" }}
+    {{$out}} = {{$expr}}.digits ? cJSON_CreateString({{$expr}}.digits) : cJSON_CreateNull();
+    if (!{{$out}}) goto fail;
+    {{- else if eq (toString $type) "null" }}
+    {{$out}} = cJSON_CreateNull();
+    if (!{{$out}}) goto fail;
+    {{- else }}
+    {{$out}} = cJSON_CreateNull();
+    if (!{{$out}}) goto fail;
+    {{- end }}
+{{- else if isEnumType $type }}
+    {{$out}} = cJSON_CreateString({{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }}_to_string({{$expr}}));
+    if (!{{$out}}) goto fail;
+{{- else if and (hasField $type "Alias") $type.Alias }}
+{{ template "json_encode_value" dict "Prefix" $prefix "Type" $type.Alias.Type.Type "Expr" $expr "OutVar" $out "Depth" $depth "Types" $types }}
+{{- else }}
+    if ({{$expr}}) {
+        {{$out}} = {{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }}_to_json({{$expr}});
+    } else {
+        {{$out}} = cJSON_CreateNull();
+    }
+    if (!{{$out}}) goto fail;
+{{- end }}
+{{- end -}}
+
+{{- define "json_decode_value" -}}
+{{- $prefix := .Prefix -}}
+{{- $type := .Type -}}
+{{- $json := .JsonExpr -}}
+{{- $dest := .DestExpr -}}
+{{- $depth := 0 -}}
+{{- if exists . "Depth" -}}
+{{- $depth = get . "Depth" -}}
+{{- end -}}
+{{- $types := array -}}
+{{- if exists . "Types" -}}
+{{- $types = get . "Types" -}}
+{{- end -}}
+{{- if isMapType $type }}
+    if (!cJSON_IsObject({{$json}})) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected JSON object", NULL);
+        goto fail;
+    }
+{{ template "assert_supported_map_key_type" dict "Type" (mapKeyType $type) "Types" $types }}
+    {
+        size_t count = (size_t)cJSON_GetArraySize({{$json}});
+        {{$dest}}.keys = count ? calloc(count, sizeof(*{{$dest}}.keys)) : NULL;
+        {{$dest}}.values = count ? calloc(count, sizeof(*{{$dest}}.values)) : NULL;
+        if (count && (!{{$dest}}.keys || !{{$dest}}.values)) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "out of memory decoding map", NULL);
+            goto fail;
+        }
+        {{$dest}}.count = count;
+        size_t {{ printf "map_idx_%d" $depth }} = 0;
+        cJSON *{{ printf "map_entry_%d" $depth }} = NULL;
+        cJSON_ArrayForEach({{ printf "map_entry_%d" $depth }}, {{$json}}) {
+            const char *entry_key = {{ printf "map_entry_%d" $depth }} ? {{ printf "map_entry_%d" $depth }}->string : NULL;
+            if (!entry_key) {
+                {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "missing map key", NULL);
+                goto fail;
+            }
+{{ template "json_decode_map_key_from_string" dict "Prefix" $prefix "Type" (mapKeyType $type) "StringExpr" "entry_key" "DestExpr" (printf "%s.keys[%s]" $dest (printf "map_idx_%d" $depth)) "Types" $types }}
+{{ template "json_decode_value" dict "Prefix" $prefix "Type" (mapValueType $type) "JsonExpr" (printf "map_entry_%d" $depth) "DestExpr" (printf "%s.values[%s]" $dest (printf "map_idx_%d" $depth)) "Depth" (add $depth 1) "Types" $types }}
+            {{ printf "map_idx_%d" $depth }}++;
+        }
+    }
+{{- else if isListType $type }}
+    {{- $elem := listElemType $type -}}
+    if (!cJSON_IsArray({{$json}})) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected JSON array", NULL);
+        goto fail;
+    }
+    {
+        size_t count = (size_t)cJSON_GetArraySize({{$json}});
+        {{- if eq (toString $elem) "byte" }}
+        {{$dest}}.data = count ? (uint8_t *)calloc(count, sizeof(*{{$dest}}.data)) : NULL;
+        if (count && !{{$dest}}.data) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "out of memory decoding byte array", NULL);
+            goto fail;
+        }
+        {{$dest}}.len = count;
+        for (size_t {{ printf "list_idx_%d" $depth }} = 0; {{ printf "list_idx_%d" $depth }} < count; ++{{ printf "list_idx_%d" $depth }}) {
+            cJSON *entry = cJSON_GetArrayItem({{$json}}, (int){{ printf "list_idx_%d" $depth }});
+            uint64_t entry_value = 0;
+            if (!{{ printf "%s_cjson_get_uint64_exact" $prefix }}(entry, &entry_value) || entry_value > 255) {
+                {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected byte array element", NULL);
+                goto fail;
+            }
+            {{$dest}}.data[{{ printf "list_idx_%d" $depth }}] = (uint8_t)entry_value;
+        }
+        {{- else }}
+        {{$dest}}.items = count ? calloc(count, sizeof(*{{$dest}}.items)) : NULL;
+        if (count && !{{$dest}}.items) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "out of memory decoding array", NULL);
+            goto fail;
+        }
+        {{$dest}}.count = count;
+        for (size_t {{ printf "list_idx_%d" $depth }} = 0; {{ printf "list_idx_%d" $depth }} < count; ++{{ printf "list_idx_%d" $depth }}) {
+            cJSON *{{ printf "list_entry_%d" $depth }} = cJSON_GetArrayItem({{$json}}, (int){{ printf "list_idx_%d" $depth }});
+{{ template "json_decode_value" dict "Prefix" $prefix "Type" $elem "JsonExpr" (printf "list_entry_%d" $depth) "DestExpr" (printf "%s.items[%s]" $dest (printf "list_idx_%d" $depth)) "Depth" (add $depth 1) "Types" $types }}
+        }
+        {{- end }}
+    }
+{{- else if isCoreType $type }}
+    {{- if eq (toString $type) "string" }}
+    if (!cJSON_IsString({{$json}}) || !cJSON_GetStringValue({{$json}})) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected string", NULL);
+        goto fail;
+    }
+    {{$dest}} = {{ printf "%s_strdup" $prefix }}(cJSON_GetStringValue({{$json}}));
+    if (!{{$dest}}) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "out of memory decoding string", NULL);
+        goto fail;
+    }
+    {{- else if eq (toString $type) "any" }}
+    {{$dest}} = {{ printf "%s_cjson_print_dup" $prefix }}({{$json}});
+    if (!{{$dest}}) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "failed to print arbitrary JSON value", NULL);
+        goto fail;
+    }
+    {{- else if eq (toString $type) "bool" }}
+    if (!cJSON_IsBool({{$json}})) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected boolean", NULL);
+        goto fail;
+    }
+    {{$dest}} = cJSON_IsTrue({{$json}});
+    {{- else if eq (toString $type) "uint64" }}
+    {
+        uint64_t parsed = 0;
+        if (!{{ printf "%s_cjson_get_uint64_exact" $prefix }}({{$json}}, &parsed)) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected uint64 number", NULL);
+            goto fail;
+        }
+        {{$dest}} = parsed;
+    }
+    {{- else if or (eq (toString $type) "uint") (eq (toString $type) "uint8") (eq (toString $type) "uint16") (eq (toString $type) "uint32") (eq (toString $type) "byte") }}
+    {
+        uint64_t parsed = 0;
+        if (!{{ printf "%s_cjson_get_uint64_exact" $prefix }}({{$json}}, &parsed)) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected unsigned integer", NULL);
+            goto fail;
+        }
+        if (parsed > UINT64_C({{ if eq (toString $type) "uint8" }}255{{ else if eq (toString $type) "uint16" }}65535{{ else if eq (toString $type) "uint32" }}4294967295{{ else if eq (toString $type) "byte" }}255{{ else }}4294967295{{ end }})) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "unsigned integer out of range", NULL);
+            goto fail;
+        }
+        {{$dest}} = ({{ template "type" dict "Type" $type "Prefix" $prefix "Types" $types }})parsed;
+    }
+    {{- else if eq (toString $type) "int64" }}
+    {
+        int64_t parsed = 0;
+        if (!{{ printf "%s_cjson_get_int64_exact" $prefix }}({{$json}}, &parsed)) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected int64 number", NULL);
+            goto fail;
+        }
+        {{$dest}} = parsed;
+    }
+    {{- else if or (eq (toString $type) "int") (eq (toString $type) "int8") (eq (toString $type) "int16") (eq (toString $type) "int32") }}
+    {
+        int64_t parsed = 0;
+        if (!{{ printf "%s_cjson_get_int64_exact" $prefix }}({{$json}}, &parsed)) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected integer", NULL);
+            goto fail;
+        }
+        if (parsed < {{ if eq (toString $type) "int8" }}-128LL{{ else if eq (toString $type) "int16" }}-32768LL{{ else if eq (toString $type) "int32" }}-2147483648LL{{ else }}-2147483648LL{{ end }} ||
+            parsed > {{ if eq (toString $type) "int8" }}127LL{{ else if eq (toString $type) "int16" }}32767LL{{ else if eq (toString $type) "int32" }}2147483647LL{{ else }}2147483647LL{{ end }}) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "integer out of range", NULL);
+            goto fail;
+        }
+        {{$dest}} = ({{ template "type" dict "Type" $type "Prefix" $prefix "Types" $types }})parsed;
+    }
+    {{- else if or (eq (toString $type) "float32") (eq (toString $type) "float64") }}
+    {
+        double parsed = 0;
+        if (!{{ printf "%s_cjson_get_double" $prefix }}({{$json}}, &parsed)) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected number", NULL);
+            goto fail;
+        }
+        {{$dest}} = ({{ template "type" dict "Type" $type "Prefix" $prefix "Types" $types }})parsed;
+    }
+    {{- else if eq (toString $type) "timestamp" }}
+    if (!cJSON_IsString({{$json}}) || !cJSON_GetStringValue({{$json}}) || {{ printf "%s_timestamp_set_string" $prefix }}(&{{$dest}}, cJSON_GetStringValue({{$json}})) != 0) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected timestamp string", NULL);
+        goto fail;
+    }
+    {{- else if eq (toString $type) "bigint" }}
+    if (!cJSON_IsString({{$json}}) || !cJSON_GetStringValue({{$json}}) || {{ printf "%s_bigint_set_string" $prefix }}(&{{$dest}}, cJSON_GetStringValue({{$json}})) != 0) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected bigint string", NULL);
+        goto fail;
+    }
+    {{- else if eq (toString $type) "null" }}
+    if (!cJSON_IsNull({{$json}})) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected null", NULL);
+        goto fail;
+    }
+    {{- end }}
+{{- else if isEnumType $type }}
+    if (!cJSON_IsString({{$json}}) || !cJSON_GetStringValue({{$json}}) || {{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }}_from_string(cJSON_GetStringValue({{$json}}), &{{$dest}}) != 0) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected enum string", NULL);
+        goto fail;
+    }
+{{- else if and (hasField $type "Alias") $type.Alias }}
+{{ template "json_decode_value" dict "Prefix" $prefix "Type" $type.Alias.Type.Type "JsonExpr" $json "DestExpr" $dest "Depth" $depth "Types" $types }}
+{{- else }}
+    if (!cJSON_IsObject({{$json}})) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected JSON object", NULL);
+        goto fail;
+    }
+    {{$dest}} = ({{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }} *)calloc(1, sizeof(*{{$dest}}));
+    if (!{{$dest}}) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "out of memory decoding object", NULL);
+        goto fail;
+    }
+    if ({{ template "cTypeName" dict "Prefix" $prefix "Name" (toString $type) }}_from_json({{$json}}, {{$dest}}, error) != 0) {
+        goto fail;
+    }
+{{- end }}
+{{- end -}}

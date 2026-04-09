@@ -1,0 +1,42 @@
+{{- define "markStructCodecReachability" -}}
+{{- $type := .Type -}}
+{{- $types := .Types -}}
+{{- $reachable := .Reachable -}}
+{{- if isMapType $type }}
+{{ template "markStructCodecReachability" dict "Type" (mapValueType $type) "Types" $types "Reachable" $reachable }}
+{{- else if isListType $type }}
+{{ template "markStructCodecReachability" dict "Type" (listElemType $type) "Types" $types "Reachable" $reachable }}
+{{- else if isCoreType $type }}
+{{- else if isEnumType $type }}
+{{- else if and (hasField $type "Alias") $type.Alias }}
+{{ template "markStructCodecReachability" dict "Type" $type.Alias.Type.Type "Types" $types "Reachable" $reachable }}
+{{- else if isStructType $type }}
+    {{- $typeName := toString $type -}}
+    {{- if not (exists $reachable $typeName) }}
+        {{- $_ := set $reachable $typeName true -}}
+        {{- range $_, $candidate := $types }}
+            {{- if and (isStructType $candidate) (eq $candidate.Name $typeName) }}
+                {{- range $_, $field := $candidate.Fields }}
+{{ template "markStructCodecReachability" dict "Type" $field.Type "Types" $types "Reachable" $reachable }}
+                {{- end }}
+            {{- end }}
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "collectStructCodecReachability" -}}
+{{- $types := .Types -}}
+{{- $encodeReachable := .EncodeReachable -}}
+{{- $decodeReachable := .DecodeReachable -}}
+{{- range $_, $service := .Services }}
+    {{- range $_, $method := $service.Methods }}
+        {{- range $_, $input := $method.Inputs }}
+{{ template "markStructCodecReachability" dict "Type" $input.Type "Types" $types "Reachable" $encodeReachable }}
+        {{- end }}
+        {{- range $_, $output := $method.Outputs }}
+{{ template "markStructCodecReachability" dict "Type" $output.Type "Types" $types "Reachable" $decodeReachable }}
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- end -}}

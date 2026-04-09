@@ -1,0 +1,133 @@
+{{- define "implStructJSON" -}}
+{{- $prefix := .Prefix -}}
+{{- $encodeReachable := .EncodeReachable -}}
+{{- $decodeReachable := .DecodeReachable -}}
+{{- range $_, $type := .Types }}
+{{- if isStructType $type }}
+{{- if exists $encodeReachable $type.Name }}
+static {{ toUpper $prefix }}_JSON_UNUSED cJSON *{{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_to_json(const {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *value) {
+    if (!value) return NULL;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+{{- range $_, $field := $type.Fields }}
+    {{- $json := dict "name" $field.Name "ignored" false "explicit" false -}}
+    {{- range $_, $meta := $field.Meta }}
+        {{- if index $meta "json" -}}
+            {{- $value := index $meta "json" -}}
+            {{- if eq $value "-" -}}
+                {{- $_ := set $json "ignored" true -}}
+            {{- else -}}
+                {{- $_ := set $json "name" $value -}}
+                {{- $_ := set $json "explicit" true -}}
+            {{- end -}}
+        {{- end -}}
+        {{- if and (not (get $json "ignored")) (not (get $json "explicit")) (index $meta "go.tag.json") -}}
+            {{- $tagName := first (split "," (index $meta "go.tag.json")) -}}
+            {{- if eq $tagName "-" -}}
+                {{- $_ := set $json "ignored" true -}}
+            {{- else if $tagName -}}
+                {{- $_ := set $json "name" $tagName -}}
+            {{- end -}}
+        {{- end -}}
+    {{- end }}
+    {{- if not (get $json "ignored") }}
+    {
+        {{- $fieldName := (snakeCase $field.Name) -}}
+        {{- if $field.Optional }}
+        if (value->has_{{$fieldName}}) {
+        {{- end }}
+            cJSON *field_json = NULL;
+{{ template "json_encode_value" dict "Prefix" $prefix "Type" $field.Type "Expr" (printf "value->%s" $fieldName) "OutVar" "field_json" "Types" $.Types }}
+            if (!cJSON_AddItemToObject(root, "{{get $json "name"}}", field_json)) {
+                cJSON_Delete(field_json);
+                goto fail;
+            }
+        {{- if $field.Optional }}
+        }
+        {{- end }}
+    }
+    {{- end }}
+{{- end }}
+    return root;
+fail:
+    cJSON_Delete(root);
+    return NULL;
+}
+{{- end }}
+
+{{- if exists $decodeReachable $type.Name }}
+static {{ toUpper $prefix }}_JSON_UNUSED int {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_from_json(const cJSON *json, {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *out, {{ printf "%s_error" $prefix }} *error) {
+    if (!out) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "output pointer is NULL", NULL);
+        return -1;
+    }
+    if (!json || cJSON_IsNull(json)) return 0;
+    if (!cJSON_IsObject(json)) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected JSON object", NULL);
+        return -1;
+    }
+{{- range $_, $field := $type.Fields }}
+    {{- $json := dict "name" $field.Name "ignored" false "explicit" false -}}
+    {{- range $_, $meta := $field.Meta }}
+        {{- if index $meta "json" -}}
+            {{- $value := index $meta "json" -}}
+            {{- if eq $value "-" -}}
+                {{- $_ := set $json "ignored" true -}}
+            {{- else -}}
+                {{- $_ := set $json "name" $value -}}
+                {{- $_ := set $json "explicit" true -}}
+            {{- end -}}
+        {{- end -}}
+        {{- if and (not (get $json "ignored")) (not (get $json "explicit")) (index $meta "go.tag.json") -}}
+            {{- $tagName := first (split "," (index $meta "go.tag.json")) -}}
+            {{- if eq $tagName "-" -}}
+                {{- $_ := set $json "ignored" true -}}
+            {{- else if $tagName -}}
+                {{- $_ := set $json "name" $tagName -}}
+            {{- end -}}
+        {{- end -}}
+    {{- end }}
+    {{- if not (get $json "ignored") }}
+    {
+        cJSON *field_json = cJSON_GetObjectItemCaseSensitive(json, "{{get $json "name"}}");
+        int field_present = field_json != NULL;
+        {{- $fieldName := (snakeCase $field.Name) -}}
+        {{- $allowsRequiredNull := false -}}
+        {{- if isCoreType $field.Type }}
+            {{- if or (eq (toString $field.Type) "null") (eq (toString $field.Type) "any") }}
+                {{- $allowsRequiredNull = true -}}
+            {{- end -}}
+        {{- else if and (hasField $field.Type "Alias") $field.Type.Alias }}
+            {{- if isCoreType $field.Type.Alias.Type.Type }}
+                {{- if or (eq (toString $field.Type.Alias.Type.Type) "null") (eq (toString $field.Type.Alias.Type.Type) "any") }}
+                    {{- $allowsRequiredNull = true -}}
+                {{- end -}}
+            {{- end -}}
+        {{- end }}
+        {{- if $field.Optional }}
+        if (field_present) {
+            out->has_{{$fieldName}} = true;
+            if (!cJSON_IsNull(field_json)) {
+{{ template "json_decode_value" dict "Prefix" $prefix "Type" $field.Type "JsonExpr" "field_json" "DestExpr" (printf "out->%s" $fieldName) "Types" $.Types }}
+            }
+        }
+        {{- else }}
+        if (!field_present{{- if not $allowsRequiredNull }} || cJSON_IsNull(field_json){{- end }}) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "missing required field {{get $json "name"}}", NULL);
+            goto fail;
+        }
+{{ template "json_decode_value" dict "Prefix" $prefix "Type" $field.Type "JsonExpr" "field_json" "DestExpr" (printf "out->%s" $fieldName) "Types" $.Types }}
+        {{- end }}
+    }
+    {{- end }}
+{{- end }}
+    return 0;
+fail:
+    {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_free(out);
+    return -1;
+}
+{{- end }}
+
+{{- end }}
+{{- end }}
+{{- end -}}

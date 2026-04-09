@@ -1,0 +1,242 @@
+{{- define "implMethodJSON" -}}
+{{- $prefix := .Prefix -}}
+static int {{ printf "%s_prepare_json_request" $prefix }}(
+    cJSON *request_json,
+    const char *path,
+    {{ printf "%s_prepared_request" $prefix }} *prepared_request,
+    {{ printf "%s_error" $prefix }} *error
+) {
+    int rc = -1;
+    char *request_body = NULL;
+    {{ printf "%s_prepared_request" $prefix }} prepared;
+    {{ printf "%s_prepared_request_init" $prefix }}(&prepared);
+
+    if (!request_json || !path || !prepared_request) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "ClientError", "request_json, path and prepared_request must be non-NULL", NULL);
+        goto fail;
+    }
+
+    request_body = {{ printf "%s_cjson_print_dup" $prefix }}(request_json);
+    if (!request_body) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "EncodeError", "failed to print request JSON", NULL);
+        goto fail;
+    }
+
+    prepared.http_method = {{ printf "%s_strdup" $prefix }}("POST");
+    prepared.path = {{ printf "%s_strdup" $prefix }}(path);
+    prepared.content_type = {{ printf "%s_strdup" $prefix }}("application/json");
+    if (!prepared.http_method || !prepared.path || !prepared.content_type) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "EncodeError", "failed to allocate prepared request metadata", NULL);
+        goto fail;
+    }
+
+    prepared.body = request_body;
+    prepared.body_len = strlen(request_body);
+    request_body = NULL;
+
+    *prepared_request = prepared;
+    memset(&prepared, 0, sizeof(prepared));
+    rc = 0;
+
+fail:
+    {{ printf "%s_prepared_request_free" $prefix }}(&prepared);
+    free(request_body);
+    return rc;
+}
+
+static int {{ printf "%s_parse_json_response" $prefix }}(
+    const {{ printf "%s_http_response" $prefix }} *http_response,
+    cJSON **response_json,
+    {{ printf "%s_error" $prefix }} *error
+) {
+    if (!http_response || !response_json) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "ClientError", "http_response and response_json must be non-NULL", NULL);
+        return -1;
+    }
+    if (http_response->status_code < 200 || http_response->status_code >= 300) {
+        {{ printf "%s_parse_rpc_error" $prefix }}(http_response->body, http_response->status_code, error);
+        return -1;
+    }
+
+    *response_json = {{ printf "%s_cjson_parse" $prefix }}(http_response->body ? http_response->body : "{}");
+    if (!*response_json) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, (int)http_response->status_code, "DecodeError", "failed to parse response JSON", http_response->body);
+        return -1;
+    }
+
+    return 0;
+}
+
+{{- range $_, $service := .Services }}
+{{- range $_, $method := $service.Methods }}
+static cJSON *{{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_to_json(const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *value) {
+    {{- if $method.Succinct }}
+    {{- if ne (len $method.Inputs) 1 }}
+    {{- fail (printf "C generator error: succinct method %s.%s must have exactly one input" $service.Name $method.Name) }}
+    {{- end }}
+    if (!value) return cJSON_CreateNull();
+    {
+        cJSON *root = NULL;
+        {{- $input := index $method.Inputs 0 -}}
+        {{- $fieldName := (snakeCase $input.Name) -}}
+{{ template "json_encode_value" dict "Prefix" $prefix "Type" $input.Type "Expr" (printf "value->%s" $fieldName) "OutVar" "root" "Types" $.Types }}
+        return root;
+fail:
+        cJSON_Delete(root);
+        return NULL;
+    }
+    {{- else }}
+    if (!value) return cJSON_CreateObject();
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return NULL;
+{{- range $_, $input := $method.Inputs }}
+    {
+        {{- $fieldName := (snakeCase $input.Name) -}}
+        {{- if $input.Optional }}
+        if (value->has_{{$fieldName}}) {
+        {{- end }}
+            cJSON *field_json = NULL;
+{{ template "json_encode_value" dict "Prefix" $prefix "Type" $input.Type "Expr" (printf "value->%s" $fieldName) "OutVar" "field_json" "Types" $.Types }}
+            if (!cJSON_AddItemToObject(root, "{{$input.Name}}", field_json)) {
+                cJSON_Delete(field_json);
+                goto fail;
+            }
+        {{- if $input.Optional }}
+        }
+        {{- end }}
+    }
+{{- end }}
+    return root;
+fail:
+    cJSON_Delete(root);
+    return NULL;
+    {{- end }}
+}
+
+static int {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_from_json(const cJSON *json, {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *out, {{ printf "%s_error" $prefix }} *error) {
+    if (!out) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "output pointer is NULL", NULL);
+        return -1;
+    }
+    {{- if $method.Succinct }}
+    {{- if ne (len $method.Outputs) 1 }}
+    {{- fail (printf "C generator error: succinct method %s.%s must have exactly one output" $service.Name $method.Name) }}
+    {{- end }}
+    if (!json) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected JSON value", NULL);
+        return -1;
+    }
+    {
+        {{- $output := index $method.Outputs 0 -}}
+        {{- $fieldName := (snakeCase $output.Name) -}}
+{{ template "json_decode_value" dict "Prefix" $prefix "Type" $output.Type "JsonExpr" "json" "DestExpr" (printf "out->%s" $fieldName) "Types" $.Types }}
+        return 0;
+fail:
+        {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_free(out);
+        return -1;
+    }
+    {{- else }}
+    if (!json || !cJSON_IsObject(json)) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected JSON object", NULL);
+        return -1;
+    }
+{{- range $_, $output := $method.Outputs }}
+    {
+        cJSON *field_json = cJSON_GetObjectItemCaseSensitive(json, "{{$output.Name}}");
+        int field_present = field_json != NULL;
+        {{- $fieldName := (snakeCase $output.Name) -}}
+        {{- $allowsRequiredNull := false -}}
+        {{- if isCoreType $output.Type }}
+            {{- if or (eq (toString $output.Type) "null") (eq (toString $output.Type) "any") }}
+                {{- $allowsRequiredNull = true -}}
+            {{- end -}}
+        {{- else if and (hasField $output.Type "Alias") $output.Type.Alias }}
+            {{- if isCoreType $output.Type.Alias.Type.Type }}
+                {{- if or (eq (toString $output.Type.Alias.Type.Type) "null") (eq (toString $output.Type.Alias.Type.Type) "any") }}
+                    {{- $allowsRequiredNull = true -}}
+                {{- end -}}
+            {{- end -}}
+        {{- end }}
+        {{- if $output.Optional }}
+        if (field_present) {
+            out->has_{{$fieldName}} = true;
+            if (!cJSON_IsNull(field_json)) {
+{{ template "json_decode_value" dict "Prefix" $prefix "Type" $output.Type "JsonExpr" "field_json" "DestExpr" (printf "out->%s" $fieldName) "Types" $.Types }}
+            }
+        }
+        {{- else }}
+        if (!field_present{{- if not $allowsRequiredNull }} || cJSON_IsNull(field_json){{- end }}) {
+            {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "missing required field {{$output.Name}}", NULL);
+            goto fail;
+        }
+{{ template "json_decode_value" dict "Prefix" $prefix "Type" $output.Type "JsonExpr" "field_json" "DestExpr" (printf "out->%s" $fieldName) "Types" $.Types }}
+        {{- end }}
+    }
+{{- end }}
+    return 0;
+fail:
+    {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_free(out);
+    return -1;
+    {{- end }}
+}
+
+int {{ printf "%s_%s_%s_prepare_request" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(
+    const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *request,
+    {{ printf "%s_prepared_request" $prefix }} *prepared_request,
+    {{ printf "%s_error" $prefix }} *error
+) {
+    int rc = -1;
+    cJSON *request_json = NULL;
+
+    if (!request || !prepared_request) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "ClientError", "request and prepared_request must be non-NULL", NULL);
+        goto fail;
+    }
+
+    request_json = {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_to_json(request);
+    if (!request_json) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "EncodeError", "failed to encode request JSON", NULL);
+        goto fail;
+    }
+
+    rc = {{ printf "%s_prepare_json_request" $prefix }}(request_json, "{{$.BasePath}}{{$service.Name}}/{{$method.Name}}", prepared_request, error);
+
+fail:
+    cJSON_Delete(request_json);
+    return rc;
+}
+
+int {{ printf "%s_%s_%s_parse_response" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(
+    const {{ printf "%s_http_response" $prefix }} *http_response,
+    {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *response,
+    {{ printf "%s_error" $prefix }} *error
+) {
+    int rc = -1;
+    cJSON *response_json = NULL;
+    {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} parsed_response;
+    {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_init(&parsed_response);
+
+    if (!http_response || !response) {
+        {{ printf "%s_set_error" $prefix }}(error, 0, 0, "ClientError", "http_response and response must be non-NULL", NULL);
+        goto fail;
+    }
+    if ({{ printf "%s_parse_json_response" $prefix }}(http_response, &response_json, error) != 0) {
+        goto fail;
+    }
+    if ({{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_from_json(response_json, &parsed_response, error) != 0) {
+        goto fail;
+    }
+
+    *response = parsed_response;
+    memset(&parsed_response, 0, sizeof(parsed_response));
+    rc = 0;
+
+fail:
+    {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_free(&parsed_response);
+    cJSON_Delete(response_json);
+    return rc;
+}
+
+{{- end }}
+{{- end }}
+{{- end -}}

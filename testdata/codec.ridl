@@ -1,0 +1,19 @@
+webrpc = v1
+
+name = codec-test
+version = v1.0.0
+basepath = /rpc
+
+struct Nested
+  - id: bigint
+
+struct Payload
+  - count: bigint
+  - explicitAny: any
+  - explicitNull: null
+  - maybeAny?: any
+  - nested: Nested
+  - items: []bigint
+
+service Codec
+  - Echo(payload: Payload) => (payload: Payload)

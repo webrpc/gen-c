@@ -1,0 +1,16 @@
+webrpc = v1
+
+name = succinct-test
+version = v1.0.0
+basepath = /rpc
+
+struct FlattenRequest
+  - name: string
+  - amount: uint64
+
+struct FlattenResponse
+  - id: uint64
+  - count: uint64
+
+service Demo
+  - Flatten(FlattenRequest) => (FlattenResponse)

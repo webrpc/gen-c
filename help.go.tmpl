@@ -1,0 +1,9 @@
+{{- define "help" -}}
+  {{- stderrPrintf "webrpc C generator\n\n" -}}
+  {{- stderrPrintf "Options:\n" -}}
+  {{- stderrPrintf "  -prefix=<name>   symbol/type prefix (default: schema name)\n" -}}
+  {{- stderrPrintf "  -client          generate client declarations (default: true)\n" -}}
+  {{- stderrPrintf "  -emit=<mode>     emit either header or impl output (default: header)\n" -}}
+  {{- stderrPrintf "  -header=<file>   header include used by impl output (default: <prefix>.h)\n" -}}
+  {{- stderrPrintf "\nSee github.com/webrpc/gen-c for usage details.\n" -}}
+{{- end -}}
