@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,6 +69,54 @@ func TestInteropWithWebrpcTest(t *testing.T) {
 
 	waitForTCP(t, port, 10*time.Second, &serverLog)
 	runCmd(t, tmp, bin, serverURL)
+}
+
+func TestTransportPreservesGetRequestBody(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	header := filepath.Join(tmp, "smoke.gen.h")
+	impl := filepath.Join(tmp, "smoke.gen.c")
+	generateC(t, root, filepath.Join(root, "testdata", "smoke.ridl"), header, impl, "smoke")
+
+	testMain := filepath.Join(tmp, "get_body_test_main.c")
+	if err := os.WriteFile(testMain, []byte(getBodyCTestProgram), 0o644); err != nil {
+		t.Fatalf("write GET body test program: %v", err)
+	}
+
+	cflags := pkgConfigFlags(t, "--cflags")
+	libs := pkgConfigFlags(t, "--libs")
+	bin := filepath.Join(tmp, "get-body-test")
+	args := append([]string{"-std=c99", "-Wall", "-Wextra"}, cflags...)
+	args = append(args, "get_body_test_main.c", "-o", bin)
+	args = append(args, libs...)
+	runCmd(t, tmp, "cc", args...)
+
+	var seenMethod string
+	var seenBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		seenMethod = r.Method
+		seenBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	runCmd(t, tmp, bin, server.URL)
+
+	if seenMethod != http.MethodGet {
+		t.Fatalf("unexpected method: got %q want %q", seenMethod, http.MethodGet)
+	}
+	if seenBody != `{"hello":"world"}` {
+		t.Fatalf("unexpected GET body: got %q", seenBody)
+	}
 }
 
 func ensureWebrpcTestBinary(t *testing.T) string {
@@ -278,10 +327,10 @@ int main(int argc, char **argv) {
     }
 
     base_url = argv[1];
+    test_error_init(&error);
+    expect_true(test_runtime_init(&error) == 0, "runtime init failed");
     client = test_test_api_client_create(base_url, NULL);
     expect_true(client != NULL, "failed to create client");
-
-    test_error_init(&error);
 
     {
         test_test_api_get_empty_request request;
@@ -495,6 +544,65 @@ int main(int argc, char **argv) {
 
     test_error_free(&error);
     test_test_api_client_destroy(client);
+    test_runtime_cleanup();
+    return 0;
+}
+`
+
+const getBodyCTestProgram = `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "smoke.gen.c"
+
+static void fail_msg(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
+
+static void expect_true(int cond, const char *msg) {
+    if (!cond) {
+        fail_msg(msg);
+    }
+}
+
+int main(int argc, char **argv) {
+    smoke_smoke_client *client = NULL;
+    smoke_prepared_request request;
+    smoke_http_response response;
+    smoke_error error;
+
+    if (argc != 2) {
+        fail_msg("expected base URL argument");
+    }
+
+    smoke_error_init(&error);
+    expect_true(smoke_runtime_init(&error) == 0, "runtime init failed");
+    client = smoke_smoke_client_create(argv[1], NULL);
+    expect_true(client != NULL, "client create failed");
+
+    smoke_prepared_request_init(&request);
+    smoke_http_response_init(&response);
+
+    request.http_method = smoke_strdup("GET");
+    request.path = smoke_strdup("/");
+    request.body = smoke_strdup("{\"hello\":\"world\"}");
+    request.body_len = strlen(request.body);
+    request.content_type = smoke_strdup("application/json");
+
+    expect_true(request.http_method != NULL, "method alloc failed");
+    expect_true(request.path != NULL, "path alloc failed");
+    expect_true(request.body != NULL, "body alloc failed");
+    expect_true(request.content_type != NULL, "content type alloc failed");
+
+    expect_true(smoke_smoke_client_send_prepared_request(client, &request, &response, &error) == 0, "request failed");
+    expect_true(response.status_code == 200, "unexpected status code");
+
+    smoke_error_free(&error);
+    smoke_http_response_free(&response);
+    smoke_prepared_request_free(&request);
+    smoke_smoke_client_destroy(client);
+    smoke_runtime_cleanup();
     return 0;
 }
 `

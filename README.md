@@ -28,6 +28,13 @@ Generated `impl` output currently depends on:
 
 The generated code targets C99.
 
+When using the generated `libcurl` client runtime, call the generated runtime
+hooks before and after client use. For example, if you generate with
+`-prefix=example`, call `example_runtime_init()` before the first request and
+`example_runtime_cleanup()` after the last one. This follows libcurl's
+documented global initialization model:
+[libcurl API overview](https://curl.se/libcurl/c/libcurl.html).
+
 Typical compile / link flags look like:
 
 ```bash
@@ -77,6 +84,7 @@ The current generator does not support:
 - streaming methods
 - map keys other than `string` or `enum`
 - a shared external transport abstraction; the generated runtime is currently self-contained
+- automatic redirect following
 
 Implementation generation also assumes a companion generated header include via
 `-header=<file>`.
