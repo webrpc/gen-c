@@ -29,12 +29,12 @@ struct {
 {{- else if isCoreType $type -}}
     {{- if eq (toString $type) "byte" -}}uint8_t
     {{- else if eq (toString $type) "bool" -}}bool
-    {{- else if eq (toString $type) "uint" -}}unsigned int
+    {{- else if eq (toString $type) "uint" -}}uint32_t
     {{- else if eq (toString $type) "uint8" -}}uint8_t
     {{- else if eq (toString $type) "uint16" -}}uint16_t
     {{- else if eq (toString $type) "uint32" -}}uint32_t
     {{- else if eq (toString $type) "uint64" -}}uint64_t
-    {{- else if eq (toString $type) "int" -}}int
+    {{- else if eq (toString $type) "int" -}}int32_t
     {{- else if eq (toString $type) "int8" -}}int8_t
     {{- else if eq (toString $type) "int16" -}}int16_t
     {{- else if eq (toString $type) "int32" -}}int32_t

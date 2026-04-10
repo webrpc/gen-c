@@ -2,6 +2,11 @@
 {{- $prefix := .Prefix -}}
 {{- $services := .Services -}}
 
+/* Must be called before using the generated libcurl client runtime. */
+int {{ printf "%s_runtime_init" $prefix }}({{ printf "%s_error" $prefix }} *error);
+/* Call after the last use of the generated libcurl client runtime. */
+void {{ printf "%s_runtime_cleanup" $prefix }}(void);
+
 {{- range $_, $service := $services }}
 typedef struct {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }};
 
