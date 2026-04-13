@@ -11,7 +11,7 @@ This generator, from a webrpc schema/design file, will code-generate:
 
 2. Implementation output
    C JSON encode/decode helpers, generated method request / response handling,
-   and an optional `libcurl`-based client runtime.
+   and a self-contained `libcurl`-based HTTP transport/runtime.
 
 The generated client is intended to speak to any webrpc server language
 (Go, nodejs, etc.) as long as the schema features used are supported by this target.
@@ -28,8 +28,9 @@ Generated `impl` output currently depends on:
 
 The generated code targets C99.
 
-When using the generated `libcurl` client runtime, call the generated runtime
-hooks before and after client use. For example, if you generate with
+When using generated implementation output that sends requests through the
+generated `libcurl` transport, call the generated runtime hooks before the
+first request and after the last one. For example, if you generate with
 `-prefix=example`, call `example_runtime_init()` before the first request and
 `example_runtime_cleanup()` after the last one. This follows libcurl's
 documented global initialization model:
