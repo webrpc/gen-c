@@ -1,4 +1,4 @@
-WEBRPC_GEN_VERSION := v0.37.1
+WEBRPC_GEN_VERSION := v0.37.2
 ROOT := ..
 GEN := go run -ldflags="-X github.com/webrpc/webrpc.VERSION=$(WEBRPC_GEN_VERSION)" github.com/webrpc/webrpc/cmd/webrpc-gen@$(WEBRPC_GEN_VERSION)
 

@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-const webrpcGenModule = "github.com/webrpc/webrpc/cmd/webrpc-gen@v0.37.1"
-const webrpcGenVersion = "v0.37.1"
+const webrpcGenModule = "github.com/webrpc/webrpc/cmd/webrpc-gen@v0.37.2"
+const webrpcGenVersion = "v0.37.2"
 
 func TestGenerateSmoke(t *testing.T) {
 	root := repoRoot(t)
