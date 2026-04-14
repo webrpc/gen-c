@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-const webrpcGenModule = "github.com/webrpc/webrpc/cmd/webrpc-gen@v0.37.1"
-const webrpcGenVersion = "v0.37.1"
+const webrpcGenModule = "github.com/webrpc/webrpc/cmd/webrpc-gen@v0.37.2"
+const webrpcGenVersion = "v0.37.2"
 
 func TestGenerateSmoke(t *testing.T) {
 	root := repoRoot(t)
@@ -23,6 +23,179 @@ func TestGenerateSmoke(t *testing.T) {
 	generateC(t, root, filepath.Join(root, "testdata", "smoke.ridl"), header, impl, "smoke")
 	syntaxCheckHeader(t, header)
 	syntaxCheckImpl(t, tmp, impl)
+}
+
+func TestGeneratedTransportDoesNotAutoFollowRedirects(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	header := filepath.Join(tmp, "smoke.gen.h")
+	impl := filepath.Join(tmp, "smoke.gen.c")
+
+	generateC(t, root, filepath.Join(root, "testdata", "smoke.ridl"), header, impl, "smoke")
+
+	implText, err := os.ReadFile(impl)
+	if err != nil {
+		t.Fatalf("read generated impl: %v", err)
+	}
+	implSrc := string(implText)
+	if strings.Contains(implSrc, "CURLOPT_FOLLOWLOCATION") {
+		t.Fatalf("generated transport should not auto-follow redirects")
+	}
+}
+
+func TestGeneratedTransportGuardsResponseBufferOverflow(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	header := filepath.Join(tmp, "smoke.gen.h")
+	impl := filepath.Join(tmp, "smoke.gen.c")
+
+	generateC(t, root, filepath.Join(root, "testdata", "smoke.ridl"), header, impl, "smoke")
+
+	implText, err := os.ReadFile(impl)
+	if err != nil {
+		t.Fatalf("read generated impl: %v", err)
+	}
+	implSrc := string(implText)
+	if !strings.Contains(implSrc, "nmemb > SIZE_MAX / size") {
+		t.Fatalf("generated transport should guard size*nmemb overflow")
+	}
+	if !strings.Contains(implSrc, "buf->len > SIZE_MAX - n - 1") {
+		t.Fatalf("generated transport should guard response buffer length overflow")
+	}
+}
+
+func TestGeneratedIntUintUseFixedWidth32BitTypes(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	schemaPath := filepath.Join(tmp, "fixed-width.ridl")
+	schemaText := `webrpc = v1
+
+name = fixed_width
+version = v1.0.0
+basepath = /rpc
+
+struct Payload
+  - signed_value: int
+  - unsigned_value: uint
+
+service FixedWidth
+  - Echo(payload: Payload) => (payload: Payload)
+`
+	if err := os.WriteFile(schemaPath, []byte(schemaText), 0o644); err != nil {
+		t.Fatalf("write fixed-width schema: %v", err)
+	}
+
+	header := filepath.Join(tmp, "fixed.gen.h")
+	impl := filepath.Join(tmp, "fixed.gen.c")
+	generateC(t, root, schemaPath, header, impl, "fixed")
+
+	headerText, err := os.ReadFile(header)
+	if err != nil {
+		t.Fatalf("read generated header: %v", err)
+	}
+	headerSrc := string(headerText)
+	if !strings.Contains(headerSrc, "int32_t signed_value;") {
+		t.Fatalf("generated int should use int32_t")
+	}
+	if !strings.Contains(headerSrc, "uint32_t unsigned_value;") {
+		t.Fatalf("generated uint should use uint32_t")
+	}
+}
+
+func TestClientConfigureKeepsPreviousConfigOnFailure(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	header := filepath.Join(tmp, "smoke.gen.h")
+	impl := filepath.Join(tmp, "smoke.gen.c")
+	generateC(t, root, filepath.Join(root, "testdata", "smoke.ridl"), header, impl, "smoke")
+
+	testMain := filepath.Join(tmp, "configure_test_main.c")
+	if err := os.WriteFile(testMain, []byte(configureTestProgram), 0o644); err != nil {
+		t.Fatalf("write configure test program: %v", err)
+	}
+
+	cflags := pkgConfigFlags(t, "--cflags")
+	libs := pkgConfigFlags(t, "--libs")
+
+	bin := filepath.Join(tmp, "configure-test")
+	args := append([]string{"-std=c99", "-Wall", "-Wextra"}, cflags...)
+	args = append(args, "configure_test_main.c", "-o", bin)
+	args = append(args, libs...)
+
+	runCmd(t, tmp, "cc", args...)
+	runCmd(t, tmp, bin)
+}
+
+func TestEnumUnknownRoundTrips(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	header := filepath.Join(tmp, "smoke.gen.h")
+	impl := filepath.Join(tmp, "smoke.gen.c")
+	generateC(t, root, filepath.Join(root, "testdata", "smoke.ridl"), header, impl, "smoke")
+
+	testMain := filepath.Join(tmp, "enum_unknown_test_main.c")
+	if err := os.WriteFile(testMain, []byte(enumUnknownTestProgram), 0o644); err != nil {
+		t.Fatalf("write enum unknown test program: %v", err)
+	}
+
+	bin := filepath.Join(tmp, "enum-unknown-test")
+	runCmd(t, tmp, "cc", "-std=c99", "-Wall", "-Wextra", "enum_unknown_test_main.c", "-o", bin)
+	runCmd(t, tmp, bin)
+}
+
+func TestGenerateFailsWhenEnumUsesReservedUnknownSentinel(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	schemaPath := filepath.Join(tmp, "bad_enum.ridl")
+	schemaText := `webrpc = v1
+
+name = bad_enum
+version = v1.0.0
+basepath = /rpc
+
+enum Status: uint32
+  - UNKNOWN
+  - READY
+
+service Bad
+  - Ping() => ()
+`
+	if err := os.WriteFile(schemaPath, []byte(schemaText), 0o644); err != nil {
+		t.Fatalf("write bad enum schema: %v", err)
+	}
+
+	header := filepath.Join(tmp, "bad.gen.h")
+	args := []string{
+		"run",
+		"-ldflags=-X github.com/webrpc/webrpc.VERSION=" + webrpcGenVersion,
+		webrpcGenModule,
+		"-schema=" + schemaPath,
+		"-target=" + root,
+		"-prefix=bad",
+		"-emit=header",
+		"-out=" + header,
+	}
+
+	cmd := exec.Command("go", args...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected generator to fail for reserved enum UNKNOWN value")
+	}
+	if !strings.Contains(stderr.String(), "conflicts with reserved UNKNOWN sentinel") {
+		t.Fatalf("unexpected generator error: %s", stderr.String())
+	}
 }
 
 func TestGeneratedCodecBehavior(t *testing.T) {
@@ -263,6 +436,88 @@ int main(void) {
         cJSON_Delete(parsed);
     }
 
+    return 0;
+}
+`
+
+const configureTestProgram = `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "smoke.gen.c"
+
+static void fail_msg(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
+
+static void expect_true(int cond, const char *msg) {
+    if (!cond) {
+        fail_msg(msg);
+    }
+}
+
+int main(void) {
+    const char *initial_headers[] = {"X-Test: one"};
+    smoke_client_options initial;
+    smoke_error error;
+
+    smoke_client_options_init(&initial);
+    smoke_error_init(&error);
+    expect_true(smoke_runtime_init(&error) == 0, "runtime init failed");
+    initial.bearer_token = "token1";
+    initial.headers = initial_headers;
+    initial.headers_count = 1;
+    initial.timeout_ms = 3210L;
+
+    smoke_smoke_client *client = smoke_smoke_client_create("http://example.com", &initial);
+    expect_true(client != NULL, "client create failed");
+    expect_true(client->bearer_token != NULL && strcmp(client->bearer_token, "token1") == 0, "initial bearer mismatch");
+    expect_true(client->default_headers != NULL && strcmp(client->default_headers->data, "X-Test: one") == 0, "initial header mismatch");
+    expect_true(client->timeout_ms == 3210L, "initial timeout mismatch");
+
+    smoke_client_options invalid;
+    smoke_client_options_init(&invalid);
+    invalid.bearer_token = "token2";
+    invalid.headers_count = 1;
+    invalid.headers = NULL;
+    invalid.timeout_ms = 9999L;
+
+    expect_true(smoke_smoke_client_configure(client, &invalid) == 0, "configure should fail");
+    expect_true(client->bearer_token != NULL && strcmp(client->bearer_token, "token1") == 0, "bearer should be preserved");
+    expect_true(client->default_headers != NULL && strcmp(client->default_headers->data, "X-Test: one") == 0, "headers should be preserved");
+    expect_true(client->timeout_ms == 3210L, "timeout should be preserved");
+
+    smoke_smoke_client_destroy(client);
+    smoke_runtime_cleanup();
+    smoke_error_free(&error);
+    return 0;
+}
+`
+
+const enumUnknownTestProgram = `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "smoke.gen.h"
+
+static void fail_msg(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
+
+static void expect_true(int cond, const char *msg) {
+    if (!cond) {
+        fail_msg(msg);
+    }
+}
+
+int main(void) {
+    smoke_role role = SMOKE_ROLE_USER;
+
+    expect_true(strcmp(smoke_role_to_string(SMOKE_ROLE_UNKNOWN), "UNKNOWN") == 0, "unknown enum string mismatch");
+    expect_true(smoke_role_from_string("UNKNOWN", &role) == 0, "UNKNOWN enum string should decode");
+    expect_true(role == SMOKE_ROLE_UNKNOWN, "UNKNOWN enum value mismatch");
     return 0;
 }
 `

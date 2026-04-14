@@ -14,6 +14,11 @@ static inline void {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Na
 
 {{- range $_, $type := $types }}
 {{- if isEnumType $type }}
+{{- range $_, $field := $type.Fields }}
+{{- if eq (snakeCase $field.Name) "unknown" }}
+{{- fail (printf "C generator error: enum %s value %s conflicts with reserved UNKNOWN sentinel" $type.Name $field.Name) }}
+{{- end }}
+{{- end }}
 typedef enum {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} {
     {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper (snakeCase $type.Name)) }} = 0,
 {{- range $_, $field := $type.Fields }}
@@ -33,6 +38,10 @@ static inline const char *{{ template "cTypeName" dict "Prefix" $prefix "Name" $
 
 static inline int {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_from_string(const char *value, {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *out) {
     if (!out || !value) return -1;
+    if (strcmp(value, "UNKNOWN") == 0) {
+        *out = {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper (snakeCase $type.Name)) }};
+        return 0;
+    }
 {{- range $_, $field := $type.Fields }}
     if (strcmp(value, "{{$field.Name}}") == 0) {
         *out = {{ template "cEnumValue" dict "Prefix" $prefix "TypeName" $type.Name "FieldName" $field.Name }};

@@ -320,7 +320,7 @@ NULL
             {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected unsigned integer", NULL);
             goto fail;
         }
-        if (parsed > UINT64_C({{ if eq (toString $type) "uint8" }}255{{ else if eq (toString $type) "uint16" }}65535{{ else if eq (toString $type) "uint32" }}4294967295{{ else if eq (toString $type) "byte" }}255{{ else }}4294967295{{ end }})) {
+        if (parsed > (uint64_t)({{ if eq (toString $type) "uint8" }}UINT8_MAX{{ else if eq (toString $type) "uint16" }}UINT16_MAX{{ else if or (eq (toString $type) "uint32") (eq (toString $type) "uint") }}UINT32_MAX{{ else if eq (toString $type) "byte" }}UINT8_MAX{{ else }}UINT32_MAX{{ end }})) {
             {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "unsigned integer out of range", NULL);
             goto fail;
         }
@@ -342,8 +342,8 @@ NULL
             {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "expected integer", NULL);
             goto fail;
         }
-        if (parsed < {{ if eq (toString $type) "int8" }}-128LL{{ else if eq (toString $type) "int16" }}-32768LL{{ else if eq (toString $type) "int32" }}-2147483648LL{{ else }}-2147483648LL{{ end }} ||
-            parsed > {{ if eq (toString $type) "int8" }}127LL{{ else if eq (toString $type) "int16" }}32767LL{{ else if eq (toString $type) "int32" }}2147483647LL{{ else }}2147483647LL{{ end }}) {
+        if (parsed < {{ if eq (toString $type) "int8" }}INT8_MIN{{ else if eq (toString $type) "int16" }}INT16_MIN{{ else if or (eq (toString $type) "int32") (eq (toString $type) "int") }}INT32_MIN{{ else }}INT32_MIN{{ end }} ||
+            parsed > {{ if eq (toString $type) "int8" }}INT8_MAX{{ else if eq (toString $type) "int16" }}INT16_MAX{{ else if or (eq (toString $type) "int32") (eq (toString $type) "int") }}INT32_MAX{{ else }}INT32_MAX{{ end }}) {
             {{ printf "%s_set_error" $prefix }}(error, 0, 0, "DecodeError", "integer out of range", NULL);
             goto fail;
         }
