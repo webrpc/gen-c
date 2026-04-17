@@ -199,6 +199,47 @@ service EnumWire
 	runCmd(t, tmp, bin)
 }
 
+func TestAcronymBoundaryNamesSnakeCaseCorrectly(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	schemaPath := filepath.Join(tmp, "acronym_names.ridl")
+	schemaText := `webrpc = v1
+
+name = acronym_names
+version = v1.0.0
+basepath = /rpc
+
+struct EOAWalletData
+  - authID: string
+
+service OIDCAuth
+  - ExchangeID(wallet: EOAWalletData) => (wallet: EOAWalletData)
+`
+	if err := os.WriteFile(schemaPath, []byte(schemaText), 0o644); err != nil {
+		t.Fatalf("write acronym schema: %v", err)
+	}
+
+	header := filepath.Join(tmp, "acronym.gen.h")
+	impl := filepath.Join(tmp, "acronym.gen.c")
+	generateC(t, root, schemaPath, header, impl, "acronym")
+
+	headerText, err := os.ReadFile(header)
+	if err != nil {
+		t.Fatalf("read generated header: %v", err)
+	}
+	headerSrc := string(headerText)
+	if !strings.Contains(headerSrc, "typedef struct acronym_eoa_wallet_data acronym_eoa_wallet_data;") {
+		t.Fatalf("generated type name should preserve acronym boundary before Wallet")
+	}
+	if !strings.Contains(headerSrc, "auth_id;") {
+		t.Fatalf("generated field name should preserve acronym boundary before ID")
+	}
+	if !strings.Contains(headerSrc, "acronym_oidc_auth_exchange_id(") {
+		t.Fatalf("generated method name should preserve acronym boundaries in service and method names")
+	}
+}
+
 func TestGenerateFailsWhenEnumUsesReservedUnknownSentinel(t *testing.T) {
 	root := repoRoot(t)
 	tmp := t.TempDir()

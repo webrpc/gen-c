@@ -1,6 +1,6 @@
 {{- define "main" -}}
 {{- $opts := dict -}}
-{{- $defaultPrefix := (snakeCase .SchemaName) -}}
+{{- $defaultPrefix := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" .SchemaName "${1}_${2}")) -}}
 {{- $emitClient := (ternary (eq (default .Opts.client "true") "false") false true) -}}
 {{- set $opts "client" $emitClient -}}
 {{- set $opts "emit" (default .Opts.emit "header") -}}
@@ -39,7 +39,7 @@
 {{- if eq $opts.emit "impl" -}}
 {{- template "impl" dict "Prefix" $prefix "Header" $opts.header "SchemaName" .SchemaName "SchemaVersion" .SchemaVersion "SchemaHash" .SchemaHash "BasePath" (default (and (hasField . "BasePath") .BasePath) "/rpc/") "WebrpcGenVersion" .WebrpcGenVersion "WebrpcTarget" .WebrpcTarget "WebrpcGenCommand" .WebrpcGenCommand "Types" .Types "Services" .Services "Errors" .Errors "WebrpcErrors" .WebrpcErrors "Opts" $opts "Client" $emitClient -}}
 {{- else -}}
-{{- $guard := printf "%s_%s_%s_H" (toUpper (snakeCase .SchemaName)) (toUpper (snakeCase $prefix)) (toUpper $opts.emit) -}}
+{{- $guard := printf "%s_%s_%s_H" (toUpper (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" .SchemaName "${1}_${2}"))) (toUpper (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $prefix "${1}_${2}"))) (toUpper $opts.emit) -}}
 #ifndef {{$guard}}
 #define {{$guard}}
 

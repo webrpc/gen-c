@@ -68,7 +68,9 @@ static int {{ printf "%s_parse_json_response" $prefix }}(
 }
 
 {{- range $_, $service := .Services }}
+{{- $serviceName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $service.Name "${1}_${2}")) -}}
 {{- range $_, $method := $service.Methods }}
+{{- $methodName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $method.Name "${1}_${2}")) -}}
 static cJSON *{{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_to_json(const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *value) {
     {{- if $method.Succinct }}
     {{- if ne (len $method.Inputs) 1 }}
@@ -78,7 +80,7 @@ static cJSON *{{ template "cMethodRequestTypeName" dict "Prefix" $prefix "Servic
     {
         cJSON *root = NULL;
         {{- $input := index $method.Inputs 0 -}}
-        {{- $fieldName := (snakeCase $input.Name) -}}
+        {{- $fieldName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $input.Name "${1}_${2}")) -}}
 {{ template "json_encode_value" dict "Prefix" $prefix "Type" $input.Type "Expr" (printf "value->%s" $fieldName) "OutVar" "root" "Types" $.Types }}
         return root;
 fail:
@@ -91,7 +93,7 @@ fail:
     if (!root) return NULL;
 {{- range $_, $input := $method.Inputs }}
     {
-        {{- $fieldName := (snakeCase $input.Name) -}}
+        {{- $fieldName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $input.Name "${1}_${2}")) -}}
         {{- if $input.Optional }}
         if (value->has_{{$fieldName}}) {
         {{- end }}
@@ -128,7 +130,7 @@ static int {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceN
     }
     {
         {{- $output := index $method.Outputs 0 -}}
-        {{- $fieldName := (snakeCase $output.Name) -}}
+        {{- $fieldName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $output.Name "${1}_${2}")) -}}
 {{ template "json_decode_value" dict "Prefix" $prefix "Type" $output.Type "JsonExpr" "json" "DestExpr" (printf "out->%s" $fieldName) "Types" $.Types }}
         return 0;
 fail:
@@ -144,7 +146,7 @@ fail:
     {
         cJSON *field_json = cJSON_GetObjectItemCaseSensitive(json, "{{$output.Name}}");
         int field_present = field_json != NULL;
-        {{- $fieldName := (snakeCase $output.Name) -}}
+        {{- $fieldName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $output.Name "${1}_${2}")) -}}
         {{- $allowsRequiredNull := false -}}
         {{- if isCoreType $output.Type }}
             {{- if or (eq (toString $output.Type) "null") (eq (toString $output.Type) "any") }}
@@ -180,7 +182,7 @@ fail:
     {{- end }}
 }
 
-int {{ printf "%s_%s_%s_prepare_request" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(
+int {{ printf "%s_%s_%s_prepare_request" $prefix $serviceName $methodName }}(
     const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *request,
     {{ printf "%s_prepared_request" $prefix }} *prepared_request,
     {{ printf "%s_error" $prefix }} *error
@@ -206,7 +208,7 @@ fail:
     return rc;
 }
 
-int {{ printf "%s_%s_%s_parse_response" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(
+int {{ printf "%s_%s_%s_parse_response" $prefix $serviceName $methodName }}(
     const {{ printf "%s_http_response" $prefix }} *http_response,
     {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *response,
     {{ printf "%s_error" $prefix }} *error

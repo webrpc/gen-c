@@ -1,14 +1,15 @@
 {{- define "implClient" -}}
 {{- $prefix := .Prefix -}}
 {{- range $_, $service := .Services }}
-struct {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} {
+{{- $serviceName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $service.Name "${1}_${2}")) -}}
+struct {{ printf "%s_%s_client" $prefix $serviceName }} {
     char *base_url;
     char *bearer_token;
     struct curl_slist *default_headers;
     long timeout_ms;
 };
 
-static void {{ printf "%s_%s_client_free_config_parts" $prefix (snakeCase $service.Name) }}(char **bearer_token, struct curl_slist **default_headers) {
+static void {{ printf "%s_%s_client_free_config_parts" $prefix $serviceName }}(char **bearer_token, struct curl_slist **default_headers) {
     if (bearer_token && *bearer_token) {
         free(*bearer_token);
         *bearer_token = NULL;
@@ -19,13 +20,13 @@ static void {{ printf "%s_%s_client_free_config_parts" $prefix (snakeCase $servi
     }
 }
 
-static void {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}({{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client) {
+static void {{ printf "%s_%s_client_reset_config" $prefix $serviceName }}({{ printf "%s_%s_client" $prefix $serviceName }} *client) {
     if (!client) return;
-    {{ printf "%s_%s_client_free_config_parts" $prefix (snakeCase $service.Name) }}(&client->bearer_token, &client->default_headers);
+    {{ printf "%s_%s_client_free_config_parts" $prefix $serviceName }}(&client->bearer_token, &client->default_headers);
     client->timeout_ms = 10000L;
 }
 
-static int {{ printf "%s_%s_client_build_config" $prefix (snakeCase $service.Name) }}(
+static int {{ printf "%s_%s_client_build_config" $prefix $serviceName }}(
     const {{ printf "%s_client_options" $prefix }} *options,
     char **bearer_token,
     struct curl_slist **default_headers,
@@ -59,58 +60,58 @@ static int {{ printf "%s_%s_client_build_config" $prefix (snakeCase $service.Nam
     return 1;
 
 fail:
-    {{ printf "%s_%s_client_free_config_parts" $prefix (snakeCase $service.Name) }}(bearer_token, default_headers);
+    {{ printf "%s_%s_client_free_config_parts" $prefix $serviceName }}(bearer_token, default_headers);
     *timeout_ms = 10000L;
     return 0;
 }
 
-int {{ printf "%s_%s_client_configure" $prefix (snakeCase $service.Name) }}({{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client, const {{ printf "%s_client_options" $prefix }} *options) {
+int {{ printf "%s_%s_client_configure" $prefix $serviceName }}({{ printf "%s_%s_client" $prefix $serviceName }} *client, const {{ printf "%s_client_options" $prefix }} *options) {
     char *next_bearer_token = NULL;
     struct curl_slist *next_default_headers = NULL;
     long next_timeout_ms = 10000L;
 
     if (!client) return 0;
-    if (!{{ printf "%s_%s_client_build_config" $prefix (snakeCase $service.Name) }}(options, &next_bearer_token, &next_default_headers, &next_timeout_ms)) {
+    if (!{{ printf "%s_%s_client_build_config" $prefix $serviceName }}(options, &next_bearer_token, &next_default_headers, &next_timeout_ms)) {
         return 0;
     }
 
-    {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+    {{ printf "%s_%s_client_reset_config" $prefix $serviceName }}(client);
     client->bearer_token = next_bearer_token;
     client->default_headers = next_default_headers;
     client->timeout_ms = next_timeout_ms;
     return 1;
 }
 
-{{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *{{ printf "%s_%s_client_create" $prefix (snakeCase $service.Name) }}(const char *base_url, const {{ printf "%s_client_options" $prefix }} *options) {
-    {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client =
-        ({{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *)calloc(1, sizeof(*client));
+{{ printf "%s_%s_client" $prefix $serviceName }} *{{ printf "%s_%s_client_create" $prefix $serviceName }}(const char *base_url, const {{ printf "%s_client_options" $prefix }} *options) {
+    {{ printf "%s_%s_client" $prefix $serviceName }} *client =
+        ({{ printf "%s_%s_client" $prefix $serviceName }} *)calloc(1, sizeof(*client));
     if (!client) return NULL;
     client->base_url = {{ printf "%s_strdup" $prefix }}(base_url ? base_url : "");
     if (!client->base_url) {
         free(client);
         return NULL;
     }
-    {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
-    if (!{{ printf "%s_%s_client_configure" $prefix (snakeCase $service.Name) }}(client, options)) {
+    {{ printf "%s_%s_client_reset_config" $prefix $serviceName }}(client);
+    if (!{{ printf "%s_%s_client_configure" $prefix $serviceName }}(client, options)) {
         free(client->base_url);
         client->base_url = NULL;
-        {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+        {{ printf "%s_%s_client_reset_config" $prefix $serviceName }}(client);
         free(client);
         return NULL;
     }
     return client;
 }
 
-void {{ printf "%s_%s_client_destroy" $prefix (snakeCase $service.Name) }}({{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client) {
+void {{ printf "%s_%s_client_destroy" $prefix $serviceName }}({{ printf "%s_%s_client" $prefix $serviceName }} *client) {
     if (!client) return;
     free(client->base_url);
     client->base_url = NULL;
-    {{ printf "%s_%s_client_reset_config" $prefix (snakeCase $service.Name) }}(client);
+    {{ printf "%s_%s_client_reset_config" $prefix $serviceName }}(client);
     free(client);
 }
 
-int {{ printf "%s_%s_client_send_prepared_request" $prefix (snakeCase $service.Name) }}(
-    {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client,
+int {{ printf "%s_%s_client_send_prepared_request" $prefix $serviceName }}(
+    {{ printf "%s_%s_client" $prefix $serviceName }} *client,
     const {{ printf "%s_prepared_request" $prefix }} *request,
     {{ printf "%s_http_response" $prefix }} *response,
     {{ printf "%s_error" $prefix }} *error
@@ -132,8 +133,9 @@ int {{ printf "%s_%s_client_send_prepared_request" $prefix (snakeCase $service.N
 }
 
 {{- range $_, $method := $service.Methods }}
-int {{ printf "%s_%s_%s" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(
-    {{ printf "%s_%s_client" $prefix (snakeCase $service.Name) }} *client,
+{{- $methodName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $method.Name "${1}_${2}")) -}}
+int {{ printf "%s_%s_%s" $prefix $serviceName $methodName }}(
+    {{ printf "%s_%s_client" $prefix $serviceName }} *client,
     const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *request,
     {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *response,
     {{ printf "%s_error" $prefix }} *error
@@ -149,13 +151,13 @@ int {{ printf "%s_%s_%s" $prefix (snakeCase $service.Name) (snakeCase $method.Na
         goto fail;
     }
 
-    if ({{ printf "%s_%s_%s_prepare_request" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(request, &prepared_request, error) != 0) {
+    if ({{ printf "%s_%s_%s_prepare_request" $prefix $serviceName $methodName }}(request, &prepared_request, error) != 0) {
         goto fail;
     }
-    if ({{ printf "%s_%s_client_send_prepared_request" $prefix (snakeCase $service.Name) }}(client, &prepared_request, &http_response, error) != 0) {
+    if ({{ printf "%s_%s_client_send_prepared_request" $prefix $serviceName }}(client, &prepared_request, &http_response, error) != 0) {
         goto fail;
     }
-    if ({{ printf "%s_%s_%s_parse_response" $prefix (snakeCase $service.Name) (snakeCase $method.Name) }}(&http_response, response, error) != 0) {
+    if ({{ printf "%s_%s_%s_parse_response" $prefix $serviceName $methodName }}(&http_response, response, error) != 0) {
         goto fail;
     }
     rc = 0;
