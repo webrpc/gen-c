@@ -148,6 +148,57 @@ func TestEnumUnknownRoundTrips(t *testing.T) {
 	runCmd(t, tmp, bin)
 }
 
+func TestExplicitEnumWireValuesRoundTrip(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	schemaPath := filepath.Join(tmp, "enum_wire_values.ridl")
+	schemaText := `webrpc = v1
+
+name = enum_wire
+version = v1.0.0
+basepath = /rpc
+
+enum WalletType: string
+  - Ethereum = "ethereum"
+  - SmartWallet = "smart-wallet"
+
+struct Wallet
+  - type: WalletType
+
+service EnumWire
+  - Echo(Wallet) => (Wallet)
+`
+	if err := os.WriteFile(schemaPath, []byte(schemaText), 0o644); err != nil {
+		t.Fatalf("write enum wire schema: %v", err)
+	}
+
+	header := filepath.Join(tmp, "enumwire.gen.h")
+	impl := filepath.Join(tmp, "enumwire.gen.c")
+	generateC(t, root, schemaPath, header, impl, "enumwire")
+
+	headerText, err := os.ReadFile(header)
+	if err != nil {
+		t.Fatalf("read generated header: %v", err)
+	}
+	headerSrc := string(headerText)
+	if !strings.Contains(headerSrc, `return "ethereum";`) {
+		t.Fatalf("generated header should use explicit enum wire values")
+	}
+	if !strings.Contains(headerSrc, `strcmp(value, "smart-wallet") == 0`) {
+		t.Fatalf("generated header should decode explicit enum wire values")
+	}
+
+	testMain := filepath.Join(tmp, "enum_wire_values_test_main.c")
+	if err := os.WriteFile(testMain, []byte(enumWireValuesTestProgram), 0o644); err != nil {
+		t.Fatalf("write enum wire values test program: %v", err)
+	}
+
+	bin := filepath.Join(tmp, "enum-wire-values-test")
+	runCmd(t, tmp, "cc", "-std=c99", "-Wall", "-Wextra", "enum_wire_values_test_main.c", "-o", bin)
+	runCmd(t, tmp, bin)
+}
+
 func TestGenerateFailsWhenEnumUsesReservedUnknownSentinel(t *testing.T) {
 	root := repoRoot(t)
 	tmp := t.TempDir()
@@ -518,6 +569,33 @@ int main(void) {
     expect_true(strcmp(smoke_role_to_string(SMOKE_ROLE_UNKNOWN), "UNKNOWN") == 0, "unknown enum string mismatch");
     expect_true(smoke_role_from_string("UNKNOWN", &role) == 0, "UNKNOWN enum string should decode");
     expect_true(role == SMOKE_ROLE_UNKNOWN, "UNKNOWN enum value mismatch");
+    return 0;
+}
+`
+
+const enumWireValuesTestProgram = `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "enumwire.gen.h"
+
+static void fail_msg(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
+
+static void expect_true(int cond, const char *msg) {
+    if (!cond) {
+        fail_msg(msg);
+    }
+}
+
+int main(void) {
+    enumwire_wallet_type wallet_type = ENUMWIRE_WALLET_TYPE_ETHEREUM;
+
+    expect_true(strcmp(enumwire_wallet_type_to_string(ENUMWIRE_WALLET_TYPE_ETHEREUM), "ethereum") == 0, "explicit enum wire value mismatch");
+    expect_true(enumwire_wallet_type_from_string("smart-wallet", &wallet_type) == 0, "explicit enum wire value should decode");
+    expect_true(wallet_type == ENUMWIRE_WALLET_TYPE_SMART_WALLET, "decoded enum value mismatch");
     return 0;
 }
 `
