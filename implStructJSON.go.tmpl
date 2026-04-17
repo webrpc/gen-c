@@ -32,7 +32,7 @@ static {{ toUpper $prefix }}_JSON_UNUSED cJSON *{{ template "cTypeName" dict "Pr
     {{- end }}
     {{- if not (get $json "ignored") }}
     {
-        {{- $fieldName := (snakeCase $field.Name) -}}
+        {{- $fieldName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $field.Name "${1}_${2}")) -}}
         {{- if $field.Optional }}
         if (value->has_{{$fieldName}}) {
         {{- end }}
@@ -91,7 +91,7 @@ static {{ toUpper $prefix }}_JSON_UNUSED int {{ template "cTypeName" dict "Prefi
     {
         cJSON *field_json = cJSON_GetObjectItemCaseSensitive(json, "{{get $json "name"}}");
         int field_present = field_json != NULL;
-        {{- $fieldName := (snakeCase $field.Name) -}}
+        {{- $fieldName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $field.Name "${1}_${2}")) -}}
         {{- $allowsRequiredNull := false -}}
         {{- if isCoreType $field.Type }}
             {{- if or (eq (toString $field.Type) "null") (eq (toString $field.Type) "any") }}

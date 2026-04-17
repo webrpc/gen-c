@@ -14,13 +14,14 @@ static inline void {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Na
 
 {{- range $_, $type := $types }}
 {{- if isEnumType $type }}
+{{- $typeName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $type.Name "${1}_${2}")) -}}
 {{- range $_, $field := $type.Fields }}
-{{- if eq (snakeCase $field.Name) "unknown" }}
+{{- if eq (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $field.Name "${1}_${2}")) "unknown" }}
 {{- fail (printf "C generator error: enum %s value %s conflicts with reserved UNKNOWN sentinel" $type.Name $field.Name) }}
 {{- end }}
 {{- end }}
 typedef enum {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} {
-    {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper (snakeCase $type.Name)) }} = 0,
+    {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper $typeName) }} = 0,
 {{- range $_, $field := $type.Fields }}
     {{ template "cEnumValue" dict "Prefix" $prefix "TypeName" $type.Name "FieldName" $field.Name }},
 {{- end }}
@@ -28,7 +29,7 @@ typedef enum {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} 
 
 static inline const char *{{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_to_string({{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} value) {
     switch (value) {
-        case {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper (snakeCase $type.Name)) }}: return "UNKNOWN";
+        case {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper $typeName) }}: return "UNKNOWN";
 {{- range $_, $field := $type.Fields }}
         {{- if eq $type.Type.Expr "string" }}
         case {{ template "cEnumValue" dict "Prefix" $prefix "TypeName" $type.Name "FieldName" $field.Name }}: return "{{$field.Value}}";
@@ -43,7 +44,7 @@ static inline const char *{{ template "cTypeName" dict "Prefix" $prefix "Name" $
 static inline int {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }}_from_string(const char *value, {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} *out) {
     if (!out || !value) return -1;
     if (strcmp(value, "UNKNOWN") == 0) {
-        *out = {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper (snakeCase $type.Name)) }};
+        *out = {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper $typeName) }};
         return 0;
     }
 {{- range $_, $field := $type.Fields }}
@@ -56,7 +57,7 @@ static inline int {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Nam
         return 0;
     }
 {{- end }}
-    *out = {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper (snakeCase $type.Name)) }};
+    *out = {{ printf "%s_%s_UNKNOWN" (toUpper $prefix) (toUpper $typeName) }};
     return -1;
 }
 
@@ -88,7 +89,7 @@ struct {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Name }} {
         {{- end -}}
     {{- end }}
     {{- if not (get $json "ignored") }}
-    {{- $fieldName := (snakeCase $field.Name) -}}
+    {{- $fieldName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $field.Name "${1}_${2}")) -}}
     {{- if $field.Optional }}
     bool has_{{$fieldName}};
     {{- end }}
@@ -121,7 +122,7 @@ static inline void {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Na
         {{- end -}}
     {{- end }}
     {{- if not (get $json "ignored") }}
-{{ template "freeField" dict "FieldExpr" (printf "value->%s" (snakeCase $field.Name)) "Type" $field.Type "Prefix" $prefix }}
+{{ template "freeField" dict "FieldExpr" (printf "value->%s" (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $field.Name "${1}_${2}"))) "Type" $field.Type "Prefix" $prefix }}
     {{- end }}
 {{- end }}
     memset(value, 0, sizeof(*value));
@@ -134,7 +135,7 @@ static inline void {{ template "cTypeName" dict "Prefix" $prefix "Name" $type.Na
 {{- range $_, $method := $service.Methods }}
 typedef struct {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} {
 {{- range $_, $input := $method.Inputs }}
-    {{- $fieldName := (snakeCase $input.Name) -}}
+    {{- $fieldName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $input.Name "${1}_${2}")) -}}
     {{- if $input.Optional }}
     bool has_{{$fieldName}};
     {{- end }}
@@ -150,14 +151,14 @@ static inline void {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "S
 static inline void {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_free({{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *value) {
     if (!value) return;
 {{- range $_, $input := $method.Inputs }}
-{{ template "freeField" dict "FieldExpr" (printf "value->%s" (snakeCase $input.Name)) "Type" $input.Type "Prefix" $prefix }}
+{{ template "freeField" dict "FieldExpr" (printf "value->%s" (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $input.Name "${1}_${2}"))) "Type" $input.Type "Prefix" $prefix }}
 {{- end }}
     memset(value, 0, sizeof(*value));
 }
 
 typedef struct {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} {
 {{- range $_, $output := $method.Outputs }}
-    {{- $fieldName := (snakeCase $output.Name) -}}
+    {{- $fieldName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $output.Name "${1}_${2}")) -}}
     {{- if $output.Optional }}
     bool has_{{$fieldName}};
     {{- end }}
@@ -173,7 +174,7 @@ static inline void {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "
 static inline void {{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_free({{ template "cMethodResponseTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *value) {
     if (!value) return;
 {{- range $_, $output := $method.Outputs }}
-{{ template "freeField" dict "FieldExpr" (printf "value->%s" (snakeCase $output.Name)) "Type" $output.Type "Prefix" $prefix }}
+{{ template "freeField" dict "FieldExpr" (printf "value->%s" (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $output.Name "${1}_${2}"))) "Type" $output.Type "Prefix" $prefix }}
 {{- end }}
     memset(value, 0, sizeof(*value));
 }

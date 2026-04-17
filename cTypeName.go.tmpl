@@ -1,31 +1,36 @@
+{{- define "cSnakeCase" -}}
+{{- $name := .Name -}}
+{{- snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $name "${1}_${2}") -}}
+{{- end -}}
+
 {{- define "cTypeName" -}}
 {{- $prefix := .Prefix -}}
 {{- $name := .Name -}}
-{{- printf "%s_%s" $prefix (snakeCase $name) -}}
+{{- printf "%s_%s" $prefix (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $name "${1}_${2}")) -}}
 {{- end -}}
 
 {{- define "cEnumValue" -}}
 {{- $prefix := .Prefix -}}
 {{- $typeName := .TypeName -}}
 {{- $fieldName := .FieldName -}}
-{{- printf "%s_%s_%s" (toUpper $prefix) (toUpper (snakeCase $typeName)) (toUpper (snakeCase $fieldName)) -}}
+{{- printf "%s_%s_%s" (toUpper $prefix) (toUpper (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $typeName "${1}_${2}"))) (toUpper (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $fieldName "${1}_${2}"))) -}}
 {{- end -}}
 
 {{- define "cFieldName" -}}
 {{- $name := .Name -}}
-{{- snakeCase $name -}}
+{{- template "cSnakeCase" dict "Name" $name -}}
 {{- end -}}
 
 {{- define "cMethodRequestTypeName" -}}
 {{- $prefix := .Prefix -}}
 {{- $serviceName := .ServiceName -}}
 {{- $methodName := .MethodName -}}
-{{- printf "%s_%s_%s_request" $prefix (snakeCase $serviceName) (snakeCase $methodName) -}}
+{{- printf "%s_%s_%s_request" $prefix (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $serviceName "${1}_${2}")) (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $methodName "${1}_${2}")) -}}
 {{- end -}}
 
 {{- define "cMethodResponseTypeName" -}}
 {{- $prefix := .Prefix -}}
 {{- $serviceName := .ServiceName -}}
 {{- $methodName := .MethodName -}}
-{{- printf "%s_%s_%s_response" $prefix (snakeCase $serviceName) (snakeCase $methodName) -}}
+{{- printf "%s_%s_%s_response" $prefix (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $serviceName "${1}_${2}")) (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $methodName "${1}_${2}")) -}}
 {{- end -}}
