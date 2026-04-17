@@ -8,7 +8,7 @@ int {{ printf "%s_runtime_init" $prefix }}({{ printf "%s_error" $prefix }} *erro
 void {{ printf "%s_runtime_cleanup" $prefix }}(void);
 
 {{- range $_, $service := $services }}
-{{- $serviceName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $service.Name "${1}_${2}")) -}}
+{{- $serviceName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $service.Name "${1}_${2}")) }}
 typedef struct {{ printf "%s_%s_client" $prefix $serviceName }} {{ printf "%s_%s_client" $prefix $serviceName }};
 
 {{ printf "%s_%s_client" $prefix $serviceName }} *{{ printf "%s_%s_client_create" $prefix $serviceName }}(const char *base_url, const {{ printf "%s_client_options" $prefix }} *options);
@@ -22,7 +22,7 @@ int {{ printf "%s_%s_client_send_prepared_request" $prefix $serviceName }}(
 );
 
 {{- range $_, $method := $service.Methods }}
-{{- $methodName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $method.Name "${1}_${2}")) -}}
+{{- $methodName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $method.Name "${1}_${2}")) }}
 int {{ printf "%s_%s_%s_prepare_request" $prefix $serviceName $methodName }}(
     const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *request,
     {{ printf "%s_prepared_request" $prefix }} *prepared_request,

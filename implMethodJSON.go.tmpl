@@ -68,9 +68,9 @@ static int {{ printf "%s_parse_json_response" $prefix }}(
 }
 
 {{- range $_, $service := .Services }}
-{{- $serviceName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $service.Name "${1}_${2}")) -}}
+{{- $serviceName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $service.Name "${1}_${2}")) }}
 {{- range $_, $method := $service.Methods }}
-{{- $methodName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $method.Name "${1}_${2}")) -}}
+{{- $methodName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $method.Name "${1}_${2}")) }}
 static cJSON *{{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }}_to_json(const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *value) {
     {{- if $method.Succinct }}
     {{- if ne (len $method.Inputs) 1 }}

@@ -1,7 +1,7 @@
 {{- define "implClient" -}}
 {{- $prefix := .Prefix -}}
 {{- range $_, $service := .Services }}
-{{- $serviceName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $service.Name "${1}_${2}")) -}}
+{{- $serviceName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $service.Name "${1}_${2}")) }}
 struct {{ printf "%s_%s_client" $prefix $serviceName }} {
     char *base_url;
     char *bearer_token;
@@ -133,7 +133,7 @@ int {{ printf "%s_%s_client_send_prepared_request" $prefix $serviceName }}(
 }
 
 {{- range $_, $method := $service.Methods }}
-{{- $methodName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $method.Name "${1}_${2}")) -}}
+{{- $methodName := (snakeCase (regexReplaceAll "([A-Z]+)([A-Z][a-z])" $method.Name "${1}_${2}")) }}
 int {{ printf "%s_%s_%s" $prefix $serviceName $methodName }}(
     {{ printf "%s_%s_client" $prefix $serviceName }} *client,
     const {{ template "cMethodRequestTypeName" dict "Prefix" $prefix "ServiceName" $service.Name "MethodName" $method.Name }} *request,
