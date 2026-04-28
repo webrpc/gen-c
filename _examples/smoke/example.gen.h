@@ -54,6 +54,7 @@ typedef struct {
     const char * const *headers;
     size_t headers_count;
     long timeout_ms;
+    size_t max_response_bytes;
 } smoke_client_options;
 
 static inline char *smoke_strdup(const char *value) {
@@ -204,6 +205,7 @@ static inline void smoke_client_options_init(smoke_client_options *options) {
     if (!options) return;
     memset(options, 0, sizeof(*options));
     options->timeout_ms = 10000L;
+    options->max_response_bytes = (size_t)1024 * 1024;
 }
 
 
@@ -340,9 +342,9 @@ static inline void smoke_smoke_echo_response_free(smoke_smoke_echo_response *val
     }
     memset(value, 0, sizeof(*value));
 }
-/* Must be called before using the generated libcurl client runtime. */
+/* Must be called before using the generated client runtime. */
 int smoke_runtime_init(smoke_error *error);
-/* Call after the last use of the generated libcurl client runtime. */
+/* Call after the last use of the generated client runtime. */
 void smoke_runtime_cleanup(void);
 typedef struct smoke_smoke_client smoke_smoke_client;
 

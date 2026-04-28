@@ -2,9 +2,9 @@
 {{- $prefix := .Prefix -}}
 {{- $services := .Services -}}
 
-/* Must be called before using the generated libcurl client runtime. */
+/* Must be called before using the generated client runtime. */
 int {{ printf "%s_runtime_init" $prefix }}({{ printf "%s_error" $prefix }} *error);
-/* Call after the last use of the generated libcurl client runtime. */
+/* Call after the last use of the generated client runtime. */
 void {{ printf "%s_runtime_cleanup" $prefix }}(void);
 
 {{- range $_, $service := $services }}

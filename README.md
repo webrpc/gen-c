@@ -11,7 +11,7 @@ This generator, from a webrpc schema/design file, will code-generate:
 
 2. Implementation output
    C JSON encode/decode helpers, generated method request / response handling,
-   and a self-contained `libcurl`-based HTTP transport/runtime.
+   and an optional self-contained `libcurl`-based HTTP transport/runtime.
 
 The generated client is intended to speak to any webrpc server language
 (Go, nodejs, etc.) as long as the schema features used are supported by this target.
@@ -21,10 +21,11 @@ The generated client is intended to speak to any webrpc server language
 Generated `header` output only depends on the C standard library headers included by
 the generated file.
 
-Generated `impl` output currently depends on:
+Generated `impl` output depends on:
 
 - `cJSON`
-- `libcurl`
+- `libcurl`, unless the generated implementation is compiled with the
+  prefix-based no-curl guard
 
 The generated code targets C99.
 
@@ -53,6 +54,33 @@ Dependency names can vary slightly by platform or package manager. The important
 is that the generated implementation can include `<cjson/cJSON.h>` and link against
 `libcurl` and `cJSON`.
 
+To build generated implementation output without the built-in libcurl transport, define
+`<PREFIX>_NO_CURL_TRANSPORT`, where `<PREFIX>` is the generated prefix uppercased. For
+example, code generated with `-prefix=example` can be compiled with:
+
+```bash
+cc -std=c99 \
+  -DEXAMPLE_NO_CURL_TRANSPORT \
+  $(pkg-config --cflags libcjson) \
+  -c example.gen.c
+
+cc -std=c99 \
+  -DEXAMPLE_NO_CURL_TRANSPORT \
+  app.c example.gen.c \
+  $(pkg-config --cflags --libs libcjson) \
+  -o app
+```
+
+No-curl mode removes the generated implementation's libcurl include, types, and link
+dependency. It does not remove the `cJSON` dependency because generated JSON
+encode/decode and response parsing still use `cJSON`.
+
+The lower-level request/response helpers remain available in no-curl mode:
+`example_<service>_<method>_prepare_request(...)` builds a prepared request and
+`example_<service>_<method>_parse_response(...)` parses an HTTP response supplied by
+your own transport. Runtime and client functions still link; send attempts fail with a
+`TransportError` indicating that the built-in curl transport is disabled.
+
 Because the generated implementation uses `cJSON`, exact large 64-bit integer handling
 follows `cJSON`'s numeric behavior. If your API needs exact integer round-tripping beyond
 normal JSON number precision expectations, prefer `bigint` in the schema instead of
@@ -75,7 +103,7 @@ The current generator supports:
   - prepare request bytes without sending them
   - send a prepared request with the generated transport
   - parse a raw HTTP response into generated response types
-- generated `libcurl` client configuration for bearer auth, custom headers, and timeouts
+- generated client configuration for bearer auth, custom headers, timeouts, and bounded response buffering
 
 ## Limitations
 
@@ -86,6 +114,11 @@ The current generator does not support:
 - map keys other than `string` or `enum`
 - a shared external transport abstraction; the generated runtime is currently self-contained
 - automatic redirect following
+
+Generated client options include `max_response_bytes`, which bounds the response body
+buffer used by the built-in curl transport. `*_client_options_init(...)` defaults this
+to `1024 * 1024` bytes. Leaving it zero is treated the same as the default, not as an
+unlimited response size.
 
 Implementation generation also assumes a companion generated header include via
 `-header=<file>`.

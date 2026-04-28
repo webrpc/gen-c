@@ -25,6 +25,28 @@ func TestGenerateSmoke(t *testing.T) {
 	syntaxCheckImpl(t, tmp, impl)
 }
 
+func TestGeneratedClientOptionsIncludeMaxResponseBytes(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	header := filepath.Join(tmp, "smoke.gen.h")
+	impl := filepath.Join(tmp, "smoke.gen.c")
+
+	generateC(t, root, filepath.Join(root, "testdata", "smoke.ridl"), header, impl, "smoke")
+
+	headerText, err := os.ReadFile(header)
+	if err != nil {
+		t.Fatalf("read generated header: %v", err)
+	}
+	headerSrc := string(headerText)
+	if !strings.Contains(headerSrc, "size_t max_response_bytes;") {
+		t.Fatalf("generated client options should include max_response_bytes")
+	}
+	if !strings.Contains(headerSrc, "options->max_response_bytes = (size_t)1024 * 1024;") {
+		t.Fatalf("generated client options should default max_response_bytes")
+	}
+}
+
 func TestGeneratedTransportDoesNotAutoFollowRedirects(t *testing.T) {
 	root := repoRoot(t)
 	tmp := t.TempDir()
@@ -64,6 +86,68 @@ func TestGeneratedTransportGuardsResponseBufferOverflow(t *testing.T) {
 	if !strings.Contains(implSrc, "buf->len > SIZE_MAX - n - 1") {
 		t.Fatalf("generated transport should guard response buffer length overflow")
 	}
+	if !strings.Contains(implSrc, "max_response_bytes") {
+		t.Fatalf("generated transport should include max_response_bytes")
+	}
+	if !strings.Contains(implSrc, "need - 1 > max_response_bytes") {
+		t.Fatalf("generated transport should reject responses beyond max_response_bytes")
+	}
+}
+
+func TestGeneratedTransportEnforcesResponseBufferLimit(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	header := filepath.Join(tmp, "smoke.gen.h")
+	impl := filepath.Join(tmp, "smoke.gen.c")
+	generateC(t, root, filepath.Join(root, "testdata", "smoke.ridl"), header, impl, "smoke")
+
+	testMain := filepath.Join(tmp, "response_limit_test_main.c")
+	if err := os.WriteFile(testMain, []byte(responseLimitTestProgram), 0o644); err != nil {
+		t.Fatalf("write response limit test program: %v", err)
+	}
+
+	cflags := pkgConfigFlags(t, "--cflags")
+	libs := pkgConfigFlags(t, "--libs")
+
+	bin := filepath.Join(tmp, "response-limit-test")
+	args := append([]string{"-std=c99", "-Wall", "-Wextra"}, cflags...)
+	args = append(args, "response_limit_test_main.c", "-o", bin)
+	args = append(args, libs...)
+
+	runCmd(t, tmp, "cc", args...)
+	runCmd(t, tmp, bin)
+}
+
+func TestGeneratedNoCurlModeCompilesAndKeepsHelpers(t *testing.T) {
+	root := repoRoot(t)
+	tmp := t.TempDir()
+
+	header := filepath.Join(tmp, "smoke.gen.h")
+	impl := filepath.Join(tmp, "smoke.gen.c")
+	generateC(t, root, filepath.Join(root, "testdata", "smoke.ridl"), header, impl, "smoke")
+
+	implText, err := os.ReadFile(impl)
+	if err != nil {
+		t.Fatalf("read generated impl: %v", err)
+	}
+	assertNoActiveNoCurlTypeRefs(t, string(implText), "SMOKE_NO_CURL_TRANSPORT")
+
+	testMain := filepath.Join(tmp, "no_curl_test_main.c")
+	if err := os.WriteFile(testMain, []byte(noCurlTestProgram), 0o644); err != nil {
+		t.Fatalf("write no-curl test program: %v", err)
+	}
+
+	cflags := pkgConfigCJSONFlags(t, "--cflags")
+	libs := pkgConfigCJSONFlags(t, "--libs")
+
+	bin := filepath.Join(tmp, "no-curl-test")
+	args := append([]string{"-std=c99", "-Wall", "-Wextra", "-DSMOKE_NO_CURL_TRANSPORT"}, cflags...)
+	args = append(args, "no_curl_test_main.c", "-o", bin)
+	args = append(args, libs...)
+
+	runCmd(t, tmp, "cc", args...)
+	runCmd(t, tmp, bin)
 }
 
 func TestGeneratedIntUintUseFixedWidth32BitTypes(t *testing.T) {
@@ -400,6 +484,86 @@ func pkgConfigFlags(t *testing.T, mode string) []string {
 	return nil
 }
 
+func pkgConfigCJSONFlags(t *testing.T, mode string) []string {
+	t.Helper()
+
+	candidates := [][]string{
+		{mode, "libcjson"},
+		{mode, "cjson"},
+	}
+
+	for _, args := range candidates {
+		cmd := exec.Command("pkg-config", args...)
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err == nil {
+			return strings.Fields(stdout.String())
+		}
+	}
+
+	t.Fatalf("pkg-config failed for cJSON using mode %s", mode)
+	return nil
+}
+
+func assertNoActiveNoCurlTypeRefs(t *testing.T, src, guard string) {
+	t.Helper()
+
+	type frame struct {
+		parent bool
+		cond   bool
+	}
+	active := true
+	var stack []frame
+
+	for lineNo, line := range strings.Split(src, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "#ifndef "+guard):
+			stack = append(stack, frame{parent: active, cond: false})
+			active = false
+			continue
+		case strings.HasPrefix(trimmed, "#ifdef "+guard):
+			stack = append(stack, frame{parent: active, cond: true})
+			active = active
+			continue
+		case strings.HasPrefix(trimmed, "#if"):
+			stack = append(stack, frame{parent: active, cond: true})
+			continue
+		case strings.HasPrefix(trimmed, "#else"):
+			if len(stack) == 0 {
+				continue
+			}
+			top := &stack[len(stack)-1]
+			top.cond = !top.cond
+			active = top.parent && top.cond
+			continue
+		case strings.HasPrefix(trimmed, "#endif"):
+			if len(stack) == 0 {
+				continue
+			}
+			top := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			active = top.parent
+			continue
+		}
+
+		if !active {
+			continue
+		}
+		if strings.Contains(line, "<curl/") ||
+			strings.Contains(line, "struct curl_slist") ||
+			strings.Contains(line, "CURL") ||
+			strings.Contains(line, "curl_") ||
+			strings.Contains(line, "CURLOPT_") ||
+			strings.Contains(line, "CURLINFO_") ||
+			strings.Contains(line, "CURLE_") {
+			t.Fatalf("generated no-curl output has active curl type/reference on line %d: %s", lineNo+1, line)
+		}
+	}
+}
+
 func runCmd(t *testing.T, dir, name string, args ...string) string {
 	t.Helper()
 
@@ -532,6 +696,99 @@ int main(void) {
 }
 `
 
+const responseLimitTestProgram = `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "smoke.gen.c"
+
+static void fail_msg(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
+
+static void expect_true(int cond, const char *msg) {
+    if (!cond) {
+        fail_msg(msg);
+    }
+}
+
+int main(void) {
+    smoke_buffer buf;
+    char first[] = "abc";
+    char second[] = "d";
+
+    memset(&buf, 0, sizeof(buf));
+    buf.max_response_bytes = 3;
+
+    expect_true(smoke_write_cb(first, 1, 3, &buf) == 3, "initial write should fit");
+    expect_true(buf.len == 3 && strcmp(buf.data, "abc") == 0, "initial write mismatch");
+    expect_true(buf.cap <= buf.max_response_bytes + 1, "buffer capacity should stay within max_response_bytes plus nul");
+    expect_true(smoke_write_cb(second, 1, 1, &buf) == 0, "write beyond max_response_bytes should fail");
+    expect_true(buf.len == 3 && strcmp(buf.data, "abc") == 0, "failed write should not mutate buffer");
+    expect_true(buf.cap <= buf.max_response_bytes + 1, "failed write should not grow beyond max_response_bytes plus nul");
+
+    free(buf.data);
+    return 0;
+}
+`
+
+const noCurlTestProgram = `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "smoke.gen.c"
+
+static void fail_msg(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
+
+static void expect_true(int cond, const char *msg) {
+    if (!cond) {
+        fail_msg(msg);
+    }
+}
+
+int main(void) {
+    smoke_client_options options;
+    smoke_error error;
+    smoke_prepared_request prepared;
+    smoke_http_response http_response;
+    smoke_smoke_echo_response parsed;
+
+    smoke_client_options_init(&options);
+    smoke_error_init(&error);
+    smoke_prepared_request_init(&prepared);
+    smoke_http_response_init(&http_response);
+    smoke_smoke_echo_response_init(&parsed);
+
+    expect_true(options.max_response_bytes == (size_t)1024 * 1024, "max_response_bytes default mismatch");
+    expect_true(smoke_runtime_init(&error) == 0, "no-curl runtime init should succeed");
+
+    smoke_smoke_client *client = smoke_smoke_client_create("http://example.com", &options);
+    expect_true(client != NULL, "no-curl client create failed");
+    expect_true(smoke_smoke_client_configure(client, &options) == 1, "no-curl configure should succeed");
+
+    expect_true(smoke_smoke_echo_prepare_request(NULL, &prepared, &error) != 0, "prepare helper should be available");
+    smoke_error_free(&error);
+    expect_true(smoke_smoke_echo_parse_response(NULL, &parsed, &error) != 0, "parse helper should be available");
+    smoke_error_free(&error);
+
+    expect_true(smoke_smoke_client_send_prepared_request(client, &prepared, &http_response, &error) != 0, "no-curl send should fail");
+    expect_true(error.name != NULL && strcmp(error.name, "TransportError") == 0, "no-curl send error name mismatch");
+    expect_true(error.message != NULL && strstr(error.message, "curl transport is disabled") != NULL, "no-curl send error message mismatch");
+
+    smoke_smoke_client_destroy(client);
+    smoke_runtime_cleanup();
+    smoke_prepared_request_free(&prepared);
+    smoke_http_response_free(&http_response);
+    smoke_smoke_echo_response_free(&parsed);
+    smoke_error_free(&error);
+    return 0;
+}
+`
+
 const configureTestProgram = `#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -561,12 +818,14 @@ int main(void) {
     initial.headers = initial_headers;
     initial.headers_count = 1;
     initial.timeout_ms = 3210L;
+    initial.max_response_bytes = 12345;
 
     smoke_smoke_client *client = smoke_smoke_client_create("http://example.com", &initial);
     expect_true(client != NULL, "client create failed");
     expect_true(client->bearer_token != NULL && strcmp(client->bearer_token, "token1") == 0, "initial bearer mismatch");
     expect_true(client->default_headers != NULL && strcmp(client->default_headers->data, "X-Test: one") == 0, "initial header mismatch");
     expect_true(client->timeout_ms == 3210L, "initial timeout mismatch");
+    expect_true(client->max_response_bytes == 12345, "initial max response mismatch");
 
     smoke_client_options invalid;
     smoke_client_options_init(&invalid);
@@ -574,11 +833,13 @@ int main(void) {
     invalid.headers_count = 1;
     invalid.headers = NULL;
     invalid.timeout_ms = 9999L;
+    invalid.max_response_bytes = 999;
 
     expect_true(smoke_smoke_client_configure(client, &invalid) == 0, "configure should fail");
     expect_true(client->bearer_token != NULL && strcmp(client->bearer_token, "token1") == 0, "bearer should be preserved");
     expect_true(client->default_headers != NULL && strcmp(client->default_headers->data, "X-Test: one") == 0, "headers should be preserved");
     expect_true(client->timeout_ms == 3210L, "timeout should be preserved");
+    expect_true(client->max_response_bytes == 12345, "max response should be preserved");
 
     smoke_smoke_client_destroy(client);
     smoke_runtime_cleanup();
