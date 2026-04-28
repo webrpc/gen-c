@@ -9,17 +9,22 @@
 
 #include "{{$header}}"
 
+#ifndef {{ toUpper $prefix }}_NO_CURL_TRANSPORT
 #include <curl/curl.h>
+#endif
 #include <cjson/cJSON.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
 
+#ifndef {{ toUpper $prefix }}_NO_CURL_TRANSPORT
 typedef struct {
     char *data;
     size_t len;
     size_t cap;
+    size_t max_response_bytes;
 } {{ printf "%s_buffer" $prefix }};
+#endif
 
 #if defined(__GNUC__) || defined(__clang__)
 #define {{ toUpper $prefix }}_JSON_UNUSED __attribute__((unused))

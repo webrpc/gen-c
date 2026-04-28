@@ -6,17 +6,22 @@
 
 #include "example.gen.h"
 
+#ifndef SMOKE_NO_CURL_TRANSPORT
 #include <curl/curl.h>
+#endif
 #include <cjson/cJSON.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
 
+#ifndef SMOKE_NO_CURL_TRANSPORT
 typedef struct {
     char *data;
     size_t len;
     size_t cap;
+    size_t max_response_bytes;
 } smoke_buffer;
+#endif
 
 #if defined(__GNUC__) || defined(__clang__)
 #define SMOKE_JSON_UNUSED __attribute__((unused))
@@ -133,8 +138,16 @@ static void smoke_set_error(
     error->cause = cause ? smoke_strdup(cause) : NULL;
 }
 
-static int smoke_buffer_grow(smoke_buffer *buf, size_t need) {
+#ifndef SMOKE_NO_CURL_TRANSPORT
+static size_t smoke_default_max_response_bytes(void) {
+    return (size_t)1024 * 1024;
+}
+
+static int smoke_buffer_grow(smoke_buffer *buf, size_t need, size_t max_response_bytes) {
+    size_t max_cap;
     if (!buf) return 0;
+    max_cap = max_response_bytes == SIZE_MAX ? SIZE_MAX : max_response_bytes + 1;
+    if (need > max_cap) return 0;
     if (buf->cap >= need) return 1;
     size_t new_cap = buf->cap ? buf->cap : 1024;
     while (new_cap < need) {
@@ -143,6 +156,9 @@ static int smoke_buffer_grow(smoke_buffer *buf, size_t need) {
             break;
         }
         new_cap *= 2;
+    }
+    if (new_cap > max_cap) {
+        new_cap = max_cap;
     }
     char *next = (char *)realloc(buf->data, new_cap);
     if (!next) return 0;
@@ -154,12 +170,18 @@ static int smoke_buffer_grow(smoke_buffer *buf, size_t need) {
 static size_t smoke_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
     smoke_buffer *buf = (smoke_buffer *)userdata;
     size_t n;
+    size_t need;
+    size_t max_response_bytes;
 
     if (!buf) return 0;
     if (size != 0 && nmemb > SIZE_MAX / size) return 0;
     n = size * nmemb;
+    if (n > SIZE_MAX - 1) return 0;
     if (buf->len > SIZE_MAX - n - 1) return 0;
-    if (!smoke_buffer_grow(buf, buf->len + n + 1)) return 0;
+    need = buf->len + n + 1;
+    max_response_bytes = buf->max_response_bytes > 0 ? buf->max_response_bytes : smoke_default_max_response_bytes();
+    if (need - 1 > max_response_bytes) return 0;
+    if (!smoke_buffer_grow(buf, need, max_response_bytes)) return 0;
     memcpy(buf->data + buf->len, ptr, n);
     buf->len += n;
     buf->data[buf->len] = '\0';
@@ -378,6 +400,7 @@ static int smoke_http_send_request(
     const char *bearer_token,
     const struct curl_slist *default_headers,
     long timeout_ms,
+    size_t max_response_bytes,
     smoke_http_response *response,
     smoke_error *error
 ) {
@@ -396,6 +419,7 @@ static int smoke_http_send_request(
     }
     smoke_http_response_init(&result);
     memset(&buf, 0, sizeof(buf));
+    buf.max_response_bytes = max_response_bytes > 0 ? max_response_bytes : smoke_default_max_response_bytes();
 
     curl = curl_easy_init();
     if (!curl) {
@@ -458,6 +482,15 @@ cleanup:
     }
     return rc;
 }
+#else
+int smoke_runtime_init(smoke_error *error) {
+    (void)error;
+    return 0;
+}
+
+void smoke_runtime_cleanup(void) {
+}
+#endif
 
 static void smoke_parse_rpc_error(const char *body, long http_status, smoke_error *error) {
     cJSON *error_name = NULL;
@@ -931,11 +964,13 @@ fail:
     return rc;
 }
 
+#ifndef SMOKE_NO_CURL_TRANSPORT
 struct smoke_smoke_client {
     char *base_url;
     char *bearer_token;
     struct curl_slist *default_headers;
     long timeout_ms;
+    size_t max_response_bytes;
 };
 
 static void smoke_smoke_client_free_config_parts(char **bearer_token, struct curl_slist **default_headers) {
@@ -953,22 +988,28 @@ static void smoke_smoke_client_reset_config(smoke_smoke_client *client) {
     if (!client) return;
     smoke_smoke_client_free_config_parts(&client->bearer_token, &client->default_headers);
     client->timeout_ms = 10000L;
+    client->max_response_bytes = (size_t)1024 * 1024;
 }
 
 static int smoke_smoke_client_build_config(
     const smoke_client_options *options,
     char **bearer_token,
     struct curl_slist **default_headers,
-    long *timeout_ms
+    long *timeout_ms,
+    size_t *max_response_bytes
 ) {
-    if (!bearer_token || !default_headers || !timeout_ms) return 0;
+    if (!bearer_token || !default_headers || !timeout_ms || !max_response_bytes) return 0;
     *bearer_token = NULL;
     *default_headers = NULL;
     *timeout_ms = 10000L;
+    *max_response_bytes = (size_t)1024 * 1024;
     if (!options) return 1;
 
     if (options->timeout_ms > 0) {
         *timeout_ms = options->timeout_ms;
+    }
+    if (options->max_response_bytes > 0) {
+        *max_response_bytes = options->max_response_bytes;
     }
 
     if (options->bearer_token) {
@@ -991,6 +1032,7 @@ static int smoke_smoke_client_build_config(
 fail:
     smoke_smoke_client_free_config_parts(bearer_token, default_headers);
     *timeout_ms = 10000L;
+    *max_response_bytes = (size_t)1024 * 1024;
     return 0;
 }
 
@@ -998,9 +1040,10 @@ int smoke_smoke_client_configure(smoke_smoke_client *client, const smoke_client_
     char *next_bearer_token = NULL;
     struct curl_slist *next_default_headers = NULL;
     long next_timeout_ms = 10000L;
+    size_t next_max_response_bytes = (size_t)1024 * 1024;
 
     if (!client) return 0;
-    if (!smoke_smoke_client_build_config(options, &next_bearer_token, &next_default_headers, &next_timeout_ms)) {
+    if (!smoke_smoke_client_build_config(options, &next_bearer_token, &next_default_headers, &next_timeout_ms, &next_max_response_bytes)) {
         return 0;
     }
 
@@ -1008,6 +1051,7 @@ int smoke_smoke_client_configure(smoke_smoke_client *client, const smoke_client_
     client->bearer_token = next_bearer_token;
     client->default_headers = next_default_headers;
     client->timeout_ms = next_timeout_ms;
+    client->max_response_bytes = next_max_response_bytes;
     return 1;
 }
 
@@ -1056,10 +1100,47 @@ int smoke_smoke_client_send_prepared_request(
         client->bearer_token,
         client->default_headers,
         client->timeout_ms,
+        client->max_response_bytes,
         response,
         error
     );
 }
+#else
+struct smoke_smoke_client {
+    int placeholder;
+};
+
+smoke_smoke_client *smoke_smoke_client_create(const char *base_url, const smoke_client_options *options) {
+    smoke_smoke_client *client;
+    (void)base_url;
+    (void)options;
+    client = (smoke_smoke_client *)calloc(1, sizeof(*client));
+    return client;
+}
+
+void smoke_smoke_client_destroy(smoke_smoke_client *client) {
+    free(client);
+}
+
+int smoke_smoke_client_configure(smoke_smoke_client *client, const smoke_client_options *options) {
+    (void)options;
+    return client ? 1 : 0;
+}
+
+int smoke_smoke_client_send_prepared_request(
+    smoke_smoke_client *client,
+    const smoke_prepared_request *request,
+    smoke_http_response *response,
+    smoke_error *error
+) {
+    if (!client || !request || !response) {
+        smoke_set_error(error, 0, 0, "ClientError", "client, request, and response must be non-NULL", NULL);
+        return -1;
+    }
+    smoke_set_error(error, 0, 0, "TransportError", "built-in curl transport is disabled", NULL);
+    return -1;
+}
+#endif
 int smoke_smoke_echo(
     smoke_smoke_client *client,
     const smoke_smoke_echo_request *request,

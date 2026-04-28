@@ -96,6 +96,7 @@ typedef struct {
     const char * const *headers;
     size_t headers_count;
     long timeout_ms;
+    size_t max_response_bytes;
 } {{ printf "%s_client_options" $prefix }};
 
 static inline char *{{ printf "%s_strdup" $prefix }}(const char *value) {
@@ -246,6 +247,7 @@ static inline void {{ printf "%s_client_options_init" $prefix }}({{ printf "%s_c
     if (!options) return;
     memset(options, 0, sizeof(*options));
     options->timeout_ms = 10000L;
+    options->max_response_bytes = (size_t)1024 * 1024;
 }
 
 {{ template "types" dict "Prefix" $prefix "Types" .Types "Services" .Services }}
