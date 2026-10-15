@@ -185,6 +185,7 @@ Change any of the following values by passing `-option="Value"` CLI flag to `web
 | `-client` | generate client declarations and runtime | `true` | v0.0.1 |
 | `-emit=<mode>` | emit either `header` or `impl` | `header` | v0.0.1 |
 | `-header=<file>` | header include used by `impl` output | `<prefix>.h` | v0.0.1 |
+| `-schemaHash=false` | omit the schema hash from generated output | `true` | v0.1.6 |
 
 ## Notes
 

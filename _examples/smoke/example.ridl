@@ -8,8 +8,11 @@ enum Role: uint32
   - USER
   - ADMIN
 
+type UserID: uint64
+
 struct Profile
   - id: bigint
+  - userId: UserID
   - name: string
   - role: Role
   - tags?: []string
